@@ -20,12 +20,17 @@ jobs:
           - os: windows-latest
             name: valheim-deploy-windows
             file: valheim-deploy-windows.exe
+            asset: valheim-deploy-windows.exe
           - os: macos-latest
             name: valheim-deploy-macos-arm64
             file: valheim-deploy-macos-arm64
+            # Zipped: a browser drops a bare file's execute bit, and Archive
+            # Utility restores it, so the app opens with a double-click.
+            asset: valheim-deploy-macos-arm64.zip
           - os: ubuntu-latest
             name: valheim-deploy-linux
             file: valheim-deploy-linux
+            asset: valheim-deploy-linux
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -54,10 +59,16 @@ jobs:
           done
           curl -sf http://127.0.0.1:8456/static/login.css -o /dev/null
           kill "$pid" || true
+      - name: Zip the Mac app
+        if: runner.os == 'macOS'
+        run: |
+          cd dist
+          ditto -c -k "${{ matrix.file }}" "${{ matrix.asset }}"
+          unzip -l "${{ matrix.asset }}"
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.name }}
-          path: dist/${{ matrix.file }}
+          path: dist/${{ matrix.asset }}
           if-no-files-found: error
 
   release:

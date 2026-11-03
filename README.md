@@ -15,15 +15,17 @@ from one dashboard in your browser.
 | Your computer | Download |
 |---|---|
 | Windows | `valheim-deploy-windows.exe` |
-| Mac with Apple Silicon | `valheim-deploy-macos-arm64` |
+| Mac with Apple Silicon | `valheim-deploy-macos-arm64.zip` |
 | Linux | `valheim-deploy-linux` |
 
 The app is not code-signed yet, so your computer warns you the first time:
 
 - **Windows:** at "Windows protected your PC", choose **More info**, then **Run anyway**.
   Antivirus tools sometimes flag new single-file apps like this.
-- **Mac:** in a terminal, run `chmod +x valheim-deploy-macos-arm64`, then
-  `xattr -d com.apple.quarantine valheim-deploy-macos-arm64`, and open it.
+- **Mac:** open the zip, then double-click `valheim-deploy-macos-arm64`. When
+  macOS says it was "Not Opened", choose **Done**, then go to **System Settings >
+  Privacy & Security**, scroll down and choose **Open Anyway**. Or, in a terminal:
+  `xattr -d com.apple.quarantine valheim-deploy-macos-arm64`.
 - **Linux:** run `chmod +x valheim-deploy-linux`, then run it.
 
 Keep the app's window open while you use the page and while a server is being
