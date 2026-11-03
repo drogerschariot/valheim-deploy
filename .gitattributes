@@ -1,0 +1,6 @@
+# These run on Linux game hosts. A Windows checkout must not give them CRLF.
+*.sh text eol=lf
+*.py text eol=lf
+valheim text eol=lf
+host/Dockerfile text eol=lf
+*.cmd text eol=crlf

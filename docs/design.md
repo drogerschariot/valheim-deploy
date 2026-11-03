@@ -11,7 +11,8 @@ your computer                              game host (cloud VM, Linux box, or Do
                                      players ---- UDP game ports ----^
 ```
 
-- **`vhdeploy/`** runs on the owner's computer: the wizard, providers, dashboard.
+- **`vhdeploy/`** runs on the owner's computer: the wizards, providers, dashboard.
+- **`packaging/`** builds it into a single-file app with PyInstaller.
 - **`host/`** is what lands on a game host. Standard library only.
 
 ## Decisions
@@ -41,6 +42,20 @@ and sudoers file, so several can share a host and one can be removed cleanly.
 
 **Records saved after each cloud resource.** An interrupted run can always be
 cleaned up by `destroy`, so nothing is left billing unnoticed.
+
+**A single download, with setup in the browser.** Requiring git, Python and a
+terminal ruled out many Windows users. The packaged app opens the dashboard when
+double-clicked. The browser wizard only collects answers: it submits them to
+`cli.create_server` through the same `UI(answers)` path as the terminal, so the
+rules exist once.
+
+**Long work runs as jobs.** Creating a server can take many minutes, so it runs on
+a thread with captured output (`jobs.py`, `output.py`) and the page polls it. Only
+one job runs per server. A job's log never includes the closing summary, because
+that prints the join password.
+
+**Plain `tarfile` for backups.** Backup bytes come from a remote machine, so they
+are unpacked with the `data` filter, which stops them writing outside the target.
 
 ## Traps already paid for
 
@@ -80,24 +95,27 @@ Learned on the original server. Each is enforced somewhere; do not undo them.
 
 ## Test status
 
-`python3 -m unittest discover tests` covers settings, launcher, parsers, the real
-agent supervising a fake game, the dashboard's auth and proxying, and Hetzner and
-AWS against fake backends.
+`python3 -m unittest discover tests` covers settings, launcher, parsers, packaging
+paths, jobs, the real agent supervising a fake game, the dashboard's auth and
+endpoints, and Hetzner and AWS against fake backends.
 
 | Path | Status |
 |---|---|
-| Wizard, SSH install, systemd units, sudo rules, ufw, tunnel, dashboard, day-two commands, destroy | **Run for real** on Ubuntu 24.04 under systemd, two servers on one host, with a fake game. The host was arm64, so the x86 check and 32-bit packages were patched out in a throwaway copy |
-| Docker image, entrypoint, privilege drop, volumes, port publishing, SIGINT stop, destroy | **Run for real**, natively on arm64 with a fake game and without the 32-bit packages |
-| Dashboard UI | **Run for real** in Chrome: drop-down, switching servers, every tab, no console errors |
-| Real Steam download and the real Valheim binary | **Not yet run through this repo.** The update and backup logic carries over from the live server, but install, launch and readiness here have not met the real game |
-| Hetzner API | **Fake backend only.** Request shapes come from third-party docs and client libraries, not a live call. Plans and server creation have never hit the real API |
+| Browser wizard: create, live progress, download backups, delete | **Run for real** in Chrome against Ubuntu 24.04 under systemd, arm64, with a fake game. The x86 check and 32-bit packages were patched out in a throwaway copy |
+| Terminal wizard, SSH install, systemd units, sudo rules, ufw, tunnel, day-two commands | **Run for real** the same way, two servers on one host |
+| Docker image, entrypoint, privilege drop, volumes, port publishing, SIGINT stop | **Run for real**, natively on arm64 with a fake game and without the 32-bit packages |
+| Packaged macOS app | **Run for real**: version, list, dashboard, wizard data from the bundle, second launch. Installing a server from the packaged app has not been run |
+| Packaged Windows and Linux apps | **Built and smoke tested in CI** only |
+| Update game, Fix my IP and Retry install buttons | Endpoints unit tested, not clicked through |
+| Real Steam download and the real Valheim binary | **Not yet run through this repo** |
+| Hetzner API | **Fake backend only.** Request shapes come from third-party docs and client libraries |
 | AWS | **Fake `aws` command only.** No real resources have been created |
 | Real x86-64 Ubuntu host | **Not yet run** |
-| Windows | **Not run** |
+| Windows use: icacls key permissions, paths with spaces, Docker Desktop, SSH | **Not run on a real PC** |
 | Crossplay | Join-code parsing is tested against an assumed log line, not real output |
 
-**Before announcing this, create one real Hetzner server and one real AWS server,
-and join each from the game.**
+**Before publishing a release, on a real Windows PC: download the app, create a
+real Hetzner server, join it from the game, and delete it. Do the same once on AWS.**
 
 ### Testing on Apple Silicon
 

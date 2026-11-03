@@ -248,3 +248,25 @@ header.rune select {
 [hidden] { display: none !important; }
 .note.bad { border-left-color: var(--red); color: var(--parchment); }
 .note ul { margin: 8px 0 0; padding-left: 20px; }
+
+#wizard, #job { max-width: 760px; margin: 0 auto 24px; }
+#job h2 { color: var(--gold); font-weight: 600; margin: 0 0 4px; }
+.steps { display: flex; gap: 6px; list-style: none; padding: 0; margin: 0 0 22px; flex-wrap: wrap; }
+.steps li { color: var(--muted); font-size: 13px; padding: 4px 10px; border-bottom: 2px solid var(--edge); }
+.steps li.active { color: var(--gold); border-bottom-color: var(--gold); }
+.field { display: block; margin-bottom: 14px; }
+.field > span { display: block; font-size: 14px; margin-bottom: 4px; }
+.field small { display: block; color: var(--muted); font-size: 13px; margin-top: 3px; }
+.field input[type="text"], .field input[type="password"], .field input[type="number"], .field select {
+    width: 100%; font-family: var(--mono); font-size: 14px; background: #100e0b;
+    border: 1px solid var(--edge-bright); color: var(--parchment); padding: 9px 12px;
+}
+.check { display: flex; gap: 10px; align-items: flex-start; margin-bottom: 12px; font-size: 15px; }
+.check input { margin-top: 5px; }
+.card { display: block; width: 100%; text-align: left; margin-bottom: 10px; padding: 12px 16px; }
+.card.chosen { border-color: var(--gold); color: var(--gold); }
+.card small { display: block; color: var(--muted); font-size: 13px; margin-top: 3px; }
+.card small.problem { color: #e2917c; }
+.notice { white-space: pre-wrap; font-family: var(--serif); }
+.error-line { color: #e2917c; min-height: 1.4em; font-size: 14px; }
+pre.log#job-log { max-height: 46vh; }

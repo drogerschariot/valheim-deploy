@@ -42,11 +42,11 @@ def token(ui: Any = None) -> str:
     return value
 
 
-def api(method: str, path: str, body: Any = None) -> Any:
+def api(method: str, path: str, body: Any = None, tok: str | None = None) -> Any:
     request = urllib.request.Request(
         f"{api_base()}{path}", method=method,
         data=None if body is None else json.dumps(body).encode(),
-        headers={"Authorization": f"Bearer {token()}", "Content-Type": "application/json"},
+        headers={"Authorization": f"Bearer {tok or token()}", "Content-Type": "application/json"},
     )
     try:
         with urllib.request.urlopen(request, timeout=30) as res:
@@ -59,6 +59,12 @@ def api(method: str, path: str, body: Any = None) -> Any:
         except (ValueError, KeyError):
             pass
         raise SystemExit(f"Hetzner refused {method} {path}: {detail}") from exc
+
+
+def save_token(value: str) -> None:
+    """Keep a token only after Hetzner has accepted it."""
+    api("GET", "/locations", tok=value)
+    registry.store_credential("hcloud_token", value)
 
 
 def plans(location: str, min_gb: int) -> list[dict[str, Any]]:
@@ -88,6 +94,22 @@ class Hetzner(Provider):
     key = "hetzner"
     label = "Hetzner Cloud (recommended: cheapest always-on option)"
 
+    def wizard_options(self, params: dict[str, str]) -> dict[str, Any]:
+        if not (os.environ.get("HCLOUD_TOKEN") or registry.credential("hcloud_token")):
+            return {"needs_token": True, "token_help": TOKEN_URL}
+        locations = api("GET", "/locations")["locations"]
+        location = params.get("location") or locations[0]["name"]
+        want = sizing(int(params.get("players") or 4))
+        return {
+            "needs_token": False, "recommended_gb": want, "location": location,
+            "locations": [{"value": l["name"], "label": f"{l['city']}, {l['country']} ({l['name']})"}
+                          for l in locations],
+            "plans": [{"value": p["name"],
+                       "label": f"{p['name']}: {p['cores']} {p['cpu_type']} vCPU, {p['memory']:g} GB RAM, "
+                                f"{p['disk']} GB disk, EUR {p['monthly']:.2f}/month"}
+                      for p in plans(location, want)[:6]],
+        }
+
     def collect(self, ui: Any, rec: dict[str, Any]) -> None:
         token(ui)
         locations = api("GET", "/locations")["locations"]
@@ -106,8 +128,7 @@ class Hetzner(Provider):
         rec["resources"] = {"location": location, "plan": plan, "monthly": chosen["monthly"]}
 
     def describe_cost(self, rec: dict[str, Any]) -> str:
-        return (f"Hetzner bills about EUR {rec['resources']['monthly']:.2f}/month "
-                f"until you run `./valheim destroy {rec['name']}`.")
+        return f"Hetzner bills about EUR {rec['resources']['monthly']:.2f}/month until the server is deleted."
 
     def create(self, ui: Any, rec: dict[str, Any]) -> None:
         res, name = rec["resources"], rec["name"]

@@ -11,6 +11,7 @@
 <header class="rune">
   <h1 id="server-name">Valheim</h1>
   <select id="server-select" aria-label="Choose a server"></select>
+  <button id="new-server">+ New server</button>
   <span class="world" id="world-name"></span>
   <span class="spacer"></span>
   <span class="pill" id="status-pill"><span class="dot"></span><span id="status-text">checking…</span></span>
@@ -19,9 +20,34 @@
 
 <main>
   <div class="note bad" id="offline" hidden></div>
-  <div id="empty" class="note" hidden>
-    No servers yet. In a terminal, run <span class="mono">./valheim new</span>, then reload this page.
-  </div>
+  <section id="wizard" hidden>
+    <ol class="steps" id="wizard-steps"></ol>
+    <div id="wizard-body"></div>
+    <p class="error-line" id="wizard-error"></p>
+    <div class="row" id="wizard-nav">
+      <button id="wizard-back">Back</button>
+      <button id="wizard-next">Continue</button>
+      <button id="wizard-cancel">Cancel</button>
+    </div>
+  </section>
+
+  <section id="job" hidden>
+    <h2 id="job-title"></h2>
+    <p class="muted" id="job-status"></p>
+    <pre class="log" id="job-log"></pre>
+    <div class="row" style="margin-top:14px"><button id="job-close" hidden>Done</button></div>
+  </section>
+
+  <section id="confirm-delete" class="note bad" hidden>
+    <p><strong id="delete-title"></strong> This permanently deletes the server and its world.</p>
+    <label class="check"><input type="checkbox" id="delete-download" checked> Download its backups to this computer first</label>
+    <div class="row" style="margin-top:10px">
+      <input type="text" id="delete-name" placeholder="Type the server's short name">
+      <button id="delete-go" class="danger">Delete server</button>
+      <button id="delete-cancel">Cancel</button>
+    </div>
+  </section>
+
   <div id="content">
   <section class="tiles">
     <div class="tile">
@@ -81,6 +107,11 @@
     <button data-action="stop" class="danger">Stop</button>
     <button data-action="backup">Back up now</button>
     <button data-action="update_check">Check for update</button>
+    <button data-job="update">Update game</button>
+    <button data-job="download-backups">Download backups</button>
+    <button data-job="allow-my-ip" id="fix-ip">Fix my IP</button>
+    <button data-job="apply" id="retry-install">Retry install</button>
+    <button id="delete-server" class="danger">Delete server</button>
   </section>
 
   <nav class="tabs">
@@ -154,7 +185,7 @@
       Daily archives written outside the server's own directory tree. Valheim
       keeps its own rotating copies inside <span class="mono">worlds_local</span>
       as the shorter-horizon safety net. Copy them to this computer with
-      <span class="mono">./valheim backups NAME</span>.
+      the <em>Download backups</em> button above.
     </div>
     <table>
       <thead><tr><th>Archive</th><th class="num">Size</th><th>Taken</th></tr></thead>
@@ -178,5 +209,6 @@
 </footer>
 
 <script src="/static/app.js"></script>
+<script src="/static/wizard.js"></script>
 </body>
 </html>

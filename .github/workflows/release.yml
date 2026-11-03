@@ -1,0 +1,79 @@
+name: Build apps
+
+# A manual run or a pull request builds and tests, and keeps the apps as
+# artifacts. Only pushing a v* tag publishes a GitHub Release.
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            name: valheim-deploy-windows
+            file: valheim-deploy-windows.exe
+          - os: macos-latest
+            name: valheim-deploy-macos-arm64
+            file: valheim-deploy-macos-arm64
+          - os: ubuntu-latest
+            name: valheim-deploy-linux
+            file: valheim-deploy-linux
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Tests
+        run: python -W ignore -m unittest discover tests
+      - name: Build
+        run: |
+          python -m pip install pyinstaller==6.22.3
+          python packaging/build.py ${{ matrix.name }}
+      - name: Smoke test the built app
+        shell: bash
+        env:
+          VALHEIM_DEPLOY_HOME: ${{ runner.temp }}/smoke
+        run: |
+          app="dist/${{ matrix.file }}"
+          "$app" --version
+          "$app" list
+          "$app" dashboard --no-browser --port 8456 &
+          pid=$!
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:8456/static/login.css -o /dev/null && break
+            sleep 1
+          done
+          curl -sf http://127.0.0.1:8456/static/login.css -o /dev/null
+          kill "$pid" || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: dist/${{ matrix.file }}
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: apps
+          merge-multiple: true
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: gh release create "$TAG" apps/* --repo "$REPO" --title "$TAG" --generate-notes

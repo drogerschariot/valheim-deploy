@@ -17,23 +17,27 @@ import json
 import re
 import secrets
 import threading
+import urllib.request
 import webbrowser
 from http import HTTPStatus
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
-from . import agent_client, host_a2s, registry, ssh
+from . import __version__, agent_client, cli, host_a2s, paths, registry, settings, ssh
+from .jobs import Busy, Job, Jobs
 from .providers import get as provider
+from .providers.existing import login_problem
+from .providers.hetzner import save_token
 
-STATIC_DIR = Path(__file__).resolve().parent / "static"
+STATIC_DIR = paths.static_dir()
 # A fixed set, not a filename pattern. Making something readable before sign-in
 # should take a code change.
 PUBLIC_ASSETS = {"login.css"}
-STATIC_ASSETS = {"app.js", "app.css", "login.css"}
+STATIC_ASSETS = {"app.js", "wizard.js", "app.css", "login.css"}
 SERVER_ROUTE = re.compile(r"^/api/servers/([a-z0-9-]+)/(status|logs|backups|connect|action|list|reach)$")
+JOB_ROUTE = re.compile(r"^/api/servers/([a-z0-9-]+)/(update|apply|download-backups|allow-my-ip|destroy)$")
 
 
 def dashboard_token() -> str:
@@ -46,7 +50,74 @@ def dashboard_token() -> str:
 def summary(rec: dict[str, Any]) -> dict[str, Any]:
     return {"name": rec["name"], "provider": rec["provider"],
             "provider_label": provider(rec["provider"]).label,
-            "server_name": rec["settings"]["server_name"], "status": rec.get("status")}
+            "server_name": rec["settings"]["server_name"], "status": rec.get("status"),
+            "cloud": rec["provider"] in ("aws", "hetzner"),
+            # A cloud machine that was never created cannot be retried into
+            # existence, only removed.
+            "can_retry": rec.get("status") != "installed"
+            and (rec["provider"] == "local" or bool(rec.get("ssh", {}).get("host")))}
+
+
+def wizard_options(host: str | None, params: dict[str, str]) -> dict[str, Any]:
+    """Everything the browser wizard needs to draw itself. With no host, the
+    list of hosts and what is missing for each; with one, that host's choices."""
+    if host:
+        return provider(host).wizard_options(params)
+    hosts = []
+    for key in cli.HOST_CHOICES:
+        prov = provider(key)
+        hosts.append({"key": key, "label": prov.label, "problem": prov.preflight(),
+                      "warnings": prov.warnings(), "needs_network_setup": prov.needs_network_setup})
+    return {"hosts": hosts, "notice": cli.ADVANCED_NOTICE, "presets": settings.PRESETS,
+            "suggested_password": secrets.token_urlsafe(9)}
+
+
+def create_job(jobs: Jobs, body: dict[str, Any]) -> Job:
+    """Empty fields mean "use the default", exactly as Enter does in a terminal.
+    The warning is enforced by create_server, which reads `understood`."""
+    answers = {k: v for k, v in body.items() if v not in ("", None)}
+    try:
+        name = settings.check_slug(str(answers.get("name", "")))
+    except ValueError as exc:
+        raise Refused(f"Server name: {exc}.") from exc
+    if registry.path_for(name).exists():
+        raise Refused(f"There is already a server called {name}.")
+    return jobs.start(name, "create", cli.create_server, answers)
+
+
+def server_job(jobs: Jobs, rec: dict[str, Any], what: str, body: dict[str, Any]) -> Job:
+    name, prov = rec["name"], provider(rec["provider"])
+
+    def apply(ui: Any) -> None:
+        cli.finish_install(ui, rec)
+
+    def update(ui: Any) -> int:
+        return prov.update(ui, rec)
+
+    def download(ui: Any) -> int:
+        code = prov.fetch_backups(ui, rec)
+        if code == 0:
+            ui.ok(f"Backups copied to {registry.home() / 'backups' / name}")
+        return code
+
+    def allow(ui: Any) -> None:
+        cli.allow_current_ip(ui, rec)
+
+    def destroy(ui: Any) -> int:
+        if body.get("download") and rec.get("status") == "installed":
+            ui.say("Downloading backups first...")
+            if download(ui) != 0 and not body.get("force"):
+                raise SystemExit("The backup download failed, so nothing was deleted.")
+        cli.destroy_server(ui, rec)
+        return 0
+
+    if what == "destroy" and body.get("confirm_name") != name:
+        raise Refused("Type the server's name to confirm.")
+    if what == "allow-my-ip" and rec["provider"] not in ("aws", "hetzner"):
+        raise Refused("This only applies to cloud servers.")
+    work = {"apply": apply, "update": update, "download-backups": download,
+            "allow-my-ip": allow, "destroy": destroy}[what]
+    return jobs.start(name, what, work)
 
 
 def connect_info(rec: dict[str, Any]) -> dict[str, Any]:
@@ -66,7 +137,13 @@ def connect_info(rec: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def make_handler(token: str, port: int, agent: agent_client.AgentClient) -> type[BaseHTTPRequestHandler]:
+class Refused(Exception):
+    """A request that makes sense but cannot be done, with a reason to show."""
+
+
+def make_handler(token: str, port: int, agent: agent_client.AgentClient,
+                 jobs: Jobs | None = None) -> type[BaseHTTPRequestHandler]:
+    jobs = jobs or Jobs()
     sessions: set[str] = set()
     lock = threading.Lock()
     allowed_hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
@@ -176,7 +253,29 @@ def make_handler(token: str, port: int, agent: agent_client.AgentClient) -> type
                 return
 
             if path == "/api/servers":
-                self._json(HTTPStatus.OK, {"servers": [summary(r) for r in registry.all_servers()]})
+                self._json(HTTPStatus.OK, {"servers": [
+                    {**summary(r), "job": getattr(jobs.running(r["name"]), "id", None)}
+                    for r in registry.all_servers()]})
+                return
+
+            if path == "/api/wizard/options":
+                query = {k: v[0] for k, v in parse_qs(route.query).items()}
+                host = query.pop("host", None)
+                if host is not None and host not in cli.HOST_CHOICES:
+                    self._json(HTTPStatus.BAD_REQUEST, {"error": "unknown host"})
+                    return
+                try:
+                    self._json(HTTPStatus.OK, wizard_options(host, query))
+                except (SystemExit, OSError) as exc:
+                    self._json(HTTPStatus.BAD_GATEWAY, {"error": str(getattr(exc, "code", exc))})
+                return
+
+            if path.startswith("/api/jobs/"):
+                job = jobs.get(path[len("/api/jobs/"):])
+                if job:
+                    self._json(HTTPStatus.OK, job.view())
+                else:
+                    self._json(HTTPStatus.NOT_FOUND, {"error": "no such job"})
                 return
 
             m = SERVER_ROUTE.match(path)
@@ -201,6 +300,11 @@ def make_handler(token: str, port: int, agent: agent_client.AgentClient) -> type
         def do_POST(self) -> None:  # noqa: N802
             if not self._host_ok():
                 return
+            # A plain cross-site form cannot set this type, so this is a second
+            # lock on these routes behind the SameSite cookie.
+            if self.headers.get_content_type() != "application/json":
+                self._json(HTTPStatus.UNSUPPORTED_MEDIA_TYPE, {"error": "JSON required"})
+                return
             path = urlparse(self.path).path
             body = self._body()
 
@@ -221,6 +325,37 @@ def make_handler(token: str, port: int, agent: agent_client.AgentClient) -> type
                 self._json(HTTPStatus.OK, {"ok": True}, cookie="vhsession=; Max-Age=0; Path=/")
                 return
 
+            if path == "/api/wizard/hetzner-token":
+                try:
+                    save_token(str(body.get("token", "")).strip())
+                    self._json(HTTPStatus.OK, {"ok": True})
+                except (SystemExit, OSError):
+                    self._json(HTTPStatus.BAD_REQUEST, {"error": "Hetzner did not accept that token."})
+                return
+
+            if path == "/api/wizard/check-ssh":
+                rec = {"name": "wizard-check", "ssh": {
+                    "host": str(body.get("ssh_host", "")), "user": str(body.get("ssh_user") or "root"),
+                    "port": int(body.get("ssh_port") or 22),
+                    "key": "" if body.get("ssh_key") in (None, "", "-") else str(body["ssh_key"])}}
+                self._json(HTTPStatus.OK, {"problem": login_problem(rec)})
+                return
+
+            job = None
+            try:
+                if path == "/api/servers":
+                    job = create_job(jobs, body)
+                else:
+                    m = JOB_ROUTE.match(path)
+                    if m and registry.path_for(m.group(1)).exists():
+                        job = server_job(jobs, registry.load(m.group(1)), m.group(2), body)
+            except (Busy, Refused) as exc:
+                self._json(HTTPStatus.CONFLICT, {"error": str(exc)})
+                return
+            if job:
+                self._json(HTTPStatus.ACCEPTED, {"job": job.id})
+                return
+
             m = SERVER_ROUTE.match(path)
             if m and m.group(2) in ("action", "list"):
                 rec = self._server(m.group(1))
@@ -232,14 +367,33 @@ def make_handler(token: str, port: int, agent: agent_client.AgentClient) -> type
     return Handler
 
 
+def already_running(port: int) -> bool:
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/static/login.css", timeout=3) as res:
+            return (res.headers.get("Server") or "").startswith("valheim-dashboard")
+    except OSError:
+        return False
+
+
 def serve(port: int, open_browser: bool = True) -> int:
     token = dashboard_token()
+    url = f"http://127.0.0.1:{port}/?login={token}"
     tunnels = ssh.Tunnels()
     agent = agent_client.AgentClient(tunnels)
-    server = ThreadingHTTPServer(("127.0.0.1", port), make_handler(token, port, agent))
+    try:
+        server = ThreadingHTTPServer(("127.0.0.1", port), make_handler(token, port, agent))
+    except OSError as exc:
+        if not already_running(port):
+            raise SystemExit(f"Port {port} is in use by another program ({exc}).") from exc
+        # Double-clicked a second time: the page is what they wanted.
+        print(f"Already running: {url}")
+        if open_browser:
+            webbrowser.open(url)
+        return 0
     server.daemon_threads = True
-    url = f"http://127.0.0.1:{port}/?login={token}"
-    print(f"Dashboard: {url}\nKeep this running while you use it. Ctrl-C to stop.")
+    print(f"Valheim Deploy {__version__}\n\nDashboard: {url}\n\n"
+          "Keep this window open while you use the page, and while a server is being\n"
+          "created. Closing it does not stop your game servers.")
     if open_browser:
         webbrowser.open(url)
     try:

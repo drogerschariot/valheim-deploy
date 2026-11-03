@@ -10,17 +10,17 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from .. import registry, settings, ssh
+from .. import output, registry, settings, ssh
 from . import Provider, my_public_ip
 
 IMAGE = "valheim-deploy:local"
 
 
 def docker(*args: str, capture: bool = False) -> subprocess.CompletedProcess:
-    kwargs: dict[str, Any] = {}
-    if capture:
-        kwargs = {"stdout": subprocess.PIPE, "stderr": subprocess.STDOUT, "text": True}
-    return subprocess.run(["docker", *args], check=False, **kwargs)
+    argv = ["docker", *args]
+    if not capture:
+        return subprocess.CompletedProcess(argv, output.stream(argv))
+    return subprocess.run(argv, check=False, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
 
 
 def container(rec: dict[str, Any]) -> str:
@@ -36,17 +36,27 @@ class Local(Provider):
     label = "This computer (Docker)"
     needs_network_setup = True
 
-    def collect(self, ui: Any, rec: dict[str, Any]) -> None:
+    def preflight(self) -> str | None:
         if not shutil.which("docker") or docker("info", capture=True).returncode != 0:
-            raise SystemExit("Docker is not installed or not running. Install Docker Desktop "
-                             "(https://www.docker.com/products/docker-desktop/), start it, and try again.")
+            return ("Docker is not installed or not running. Install Docker Desktop "
+                    "(https://www.docker.com/products/docker-desktop/), start it, and try again.")
+        return None
+
+    def warnings(self) -> list[str]:
+        notes = ["The server stops whenever this computer sleeps or shuts down."]
         if is_arm():
-            ui.warn("This is an ARM computer (such as Apple Silicon) and Valheim's server is x86-64 only,")
-            ui.warn("so it would run under emulation: expect slow loading, possible crashes, and poor")
-            ui.warn("performance with several players. A cloud or Linux host is strongly recommended.")
+            notes.insert(0, "This is an ARM computer (such as Apple Silicon) and Valheim's server is x86-64 "
+                            "only, so it would run under emulation: expect slow loading, possible crashes, "
+                            "and poor performance with several players. A cloud or Linux host is strongly "
+                            "recommended.")
+        return notes
+
+    def collect(self, ui: Any, rec: dict[str, Any]) -> None:
+        for note in self.warnings():
+            ui.warn(note)
+        if is_arm():
             if not ui.confirm("arm_ok", "Continue anyway?", False):
-                raise SystemExit("Stopped. Run ./valheim new again and pick another host.")
-        ui.say("The server stops whenever this computer sleeps or shuts down.")
+                raise SystemExit("Stopped. Start again and pick another host.")
 
     def create(self, ui: Any, rec: dict[str, Any]) -> None:
         try:
@@ -99,7 +109,7 @@ class Local(Provider):
         dest = registry.home() / "backups" / rec["name"]
         dest.mkdir(parents=True, exist_ok=True)
         remote = f"/opt/valheim/instances/{rec['name']}/backups/."
-        return docker("cp", f"{container(rec)}:{remote}", str(dest)).returncode
+        return docker("cp", f"{container(rec)}:{remote}", str(dest), capture=True).returncode
 
     def destroy(self, ui: Any, rec: dict[str, Any]) -> None:
         name = container(rec)

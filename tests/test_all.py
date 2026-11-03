@@ -1,5 +1,5 @@
 """Run with: python3 -m unittest discover tests"""
-import json, os, signal, socket, subprocess, sys, tempfile, threading, time, unittest, urllib.error, urllib.request
+import io, json, os, signal, socket, subprocess, sys, tarfile, tempfile, threading, time, unittest, urllib.error, urllib.request
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from unittest import mock
@@ -10,8 +10,8 @@ TMP = tempfile.mkdtemp()
 os.environ["VALHEIM_DEPLOY_HOME"] = TMP
 
 import a2s, agent, launcher  # noqa: E402
-from vhdeploy import agent_client, cli, dashboard, registry, settings, ssh  # noqa: E402
-from vhdeploy.providers import aws as aws_mod, hetzner, sizing  # noqa: E402
+from vhdeploy import agent_client, cli, dashboard, jobs, output, paths, registry, settings, ssh  # noqa: E402
+from vhdeploy.providers import aws as aws_mod, extract_tar_stream, hetzner, sizing  # noqa: E402
 from vhdeploy.ui import UI  # noqa: E402
 
 
@@ -23,6 +23,87 @@ def free_udp():
 
 def base_settings(**over):
     return {**json.loads(json.dumps(settings.DEFAULTS)), **over}
+
+
+class Packaging(unittest.TestCase):
+    def test_paths_from_source(self):
+        self.assertTrue((paths.host_dir() / "install.py").exists())
+        self.assertTrue((paths.static_dir() / "wizard.js").exists())
+
+    def test_paths_when_frozen(self):
+        with mock.patch.object(sys, "_MEIPASS", "/bundle", create=True), \
+             mock.patch.object(sys, "executable", "/x/valheim-deploy-windows.exe"):
+            self.assertEqual(paths.host_dir(), Path("/bundle/host"))
+            self.assertEqual(paths.static_dir(), Path("/bundle/vhdeploy/static"))
+            self.assertEqual(paths.command(), "valheim-deploy-windows.exe")
+
+    def test_bundle_holds_everything_the_host_needs(self):
+        names = set(tarfile.open(fileobj=io.BytesIO(ssh.bundle({}))).getnames())
+        self.assertEqual(names, set(ssh.HOST_FILES))
+
+
+class TarStream(unittest.TestCase):
+    def test_extracts_and_refuses_escapes(self):
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w") as tar:
+            for name, data in (("./good.tar.gz", b"ok"),):
+                info = tarfile.TarInfo(name)
+                info.size = len(data)
+                tar.addfile(info, io.BytesIO(data))
+        buf.seek(0)
+        dest = Path(tempfile.mkdtemp())
+        self.assertEqual(extract_tar_stream(buf, dest), 0)
+        self.assertEqual((dest / "good.tar.gz").read_bytes(), b"ok")
+
+        evil = io.BytesIO()
+        with tarfile.open(fileobj=evil, mode="w") as tar:
+            info = tarfile.TarInfo("../escaped")
+            info.size = 1
+            tar.addfile(info, io.BytesIO(b"x"))
+        evil.seek(0)
+        self.assertEqual(extract_tar_stream(evil, dest), 1)
+        self.assertFalse((dest.parent / "escaped").exists())
+
+
+class JobRunner(unittest.TestCase):
+    def wait(self, job):
+        for _ in range(200):
+            if job.state != "running":
+                return job
+            time.sleep(.01)
+        self.fail("job did not finish")
+
+    def test_lifecycle_and_failure_reason(self):
+        j = jobs.Jobs()
+        done = self.wait(j.start("a", "x", lambda ui: ui.say("hello")))
+        self.assertEqual((done.state, list(done.lines)), ("done", ["hello"]))
+
+        def boom(ui):
+            raise SystemExit("clear reason")
+        failed = self.wait(j.start("a", "x", boom))
+        self.assertEqual((failed.state, failed.error), ("failed", "clear reason"))
+
+    def test_one_job_per_server(self):
+        j, gate = jobs.Jobs(), threading.Event()
+        first = j.start("a", "x", lambda ui: gate.wait(5))
+        with self.assertRaises(jobs.Busy):
+            j.start("a", "y", lambda ui: None)
+        j.start("b", "x", lambda ui: None)  # another server is unaffected
+        gate.set()
+        self.wait(first)
+
+    def test_subprocess_output_reaches_the_job(self):
+        j = jobs.Jobs()
+        done = self.wait(j.start("a", "x", lambda ui: output.stream(
+            [sys.executable, "-c", "import sys; print(sys.stdin.read().upper())"], b"from stdin")))
+        self.assertIn("FROM STDIN", list(done.lines))
+
+    def test_job_ui_never_prompts(self):
+        ui = jobs.JobUI(jobs.Job("a", "x"), {"host": "aws"})
+        self.assertFalse(ui.show_info)
+        self.assertFalse(ui.confirm("understood", "?", False))
+        with self.assertRaises(SystemExit):
+            ui.secret("hcloud_token", "?")
 
 
 class Settings(unittest.TestCase):
@@ -311,7 +392,8 @@ class Dashboard(unittest.TestCase):
             cls.port = s.getsockname()[1]
         cls.client = mock.Mock(spec=agent_client.AgentClient)
         cls.client.call.return_value = (200, {"service": {"active": "active"}})
-        cls.srv = dashboard.ThreadingHTTPServer(("127.0.0.1", cls.port), dashboard.make_handler("tok" * 8, cls.port, cls.client))
+        cls.jobs = jobs.Jobs()
+        cls.srv = dashboard.ThreadingHTTPServer(("127.0.0.1", cls.port), dashboard.make_handler("tok" * 8, cls.port, cls.client, cls.jobs))
         threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
         for n in ("alpha", "beta"):
             registry.save({"name": n, "provider": "local", "address": "203.0.113.1", "ssh": {},
@@ -376,6 +458,76 @@ class Dashboard(unittest.TestCase):
         self.client.call.side_effect = None
         self.assertEqual(status, 502)
         self.assertTrue(json.loads(raw)["offline"])
+
+    def job_done(self, job_id, cookie):
+        for _ in range(300):
+            view = json.loads(self.http("GET", f"/api/jobs/{job_id}", cookie=cookie)[1])
+            if view["state"] != "running":
+                return view
+            time.sleep(.02)
+        self.fail("job did not finish")
+
+    def test_post_requires_json_content_type(self):
+        import http.client
+        c = http.client.HTTPConnection("127.0.0.1", self.port)
+        c.request("POST", "/api/login", "token=x", {"Host": f"127.0.0.1:{self.port}",
+                                                    "Content-Type": "application/x-www-form-urlencoded"})
+        self.assertEqual(c.getresponse().status, 415)
+
+    def test_new_routes_require_sign_in(self):
+        for path in ("/api/servers", "/api/servers/alpha/destroy", "/api/wizard/hetzner-token"):
+            self.assertEqual(self.http("POST", path, {})[0], 401, path)
+        self.assertEqual(self.http("GET", "/api/wizard/options")[0], 401)
+        self.assertEqual(self.http("GET", "/api/jobs/x")[0], 401)
+
+    def test_wizard_lists_hosts_with_notice(self):
+        with mock.patch("vhdeploy.providers.local.Local.preflight", return_value="Docker is not running"):
+            body = json.loads(self.http("GET", "/api/wizard/options", cookie=self.login())[1])
+        self.assertEqual([h["key"] for h in body["hosts"]], cli.HOST_CHOICES)
+        self.assertIn("ADVANCED", body["notice"])
+        self.assertEqual(next(h for h in body["hosts"] if h["key"] == "local")["problem"], "Docker is not running")
+        self.assertGreaterEqual(len(body["suggested_password"]), 5)
+
+    def test_unknown_wizard_host(self):
+        self.assertEqual(self.http("GET", "/api/wizard/options?host=nope", cookie=self.login())[0], 400)
+
+    def test_create_refuses_without_accepting_the_warning(self):
+        cookie = self.login()
+        status, raw, *_ = self.http("POST", "/api/servers", {"name": "gamma", "host": "local", "go": True}, cookie=cookie)
+        self.assertEqual(status, 202)
+        view = self.job_done(json.loads(raw)["job"], cookie)
+        self.assertIn("Stopped. Nothing was created.", view["lines"])
+        self.assertFalse(registry.path_for("gamma").exists())
+
+    def test_create_rejects_bad_and_duplicate_names(self):
+        cookie = self.login()
+        self.assertEqual(self.http("POST", "/api/servers", {"name": "Bad Name"}, cookie=cookie)[0], 409)
+        self.assertEqual(self.http("POST", "/api/servers", {"name": "alpha"}, cookie=cookie)[0], 409)
+
+    def test_destroy_needs_the_typed_name(self):
+        cookie = self.login()
+        self.assertEqual(self.http("POST", "/api/servers/alpha/destroy", {"confirm_name": "beta"}, cookie=cookie)[0], 409)
+        self.assertTrue(registry.path_for("alpha").exists())
+
+    def test_fix_ip_is_cloud_only(self):
+        self.assertEqual(self.http("POST", "/api/servers/alpha/allow-my-ip", {}, cookie=self.login())[0], 409)
+
+    def test_incomplete_cloud_server_offers_delete_not_retry(self):
+        registry.save({"name": "stuck", "provider": "hetzner", "status": "planned", "ssh": {},
+                       "settings": base_settings(), "secrets": {}})
+        try:
+            body = json.loads(self.http("GET", "/api/servers", cookie=self.login())[1])
+            stuck = next(s for s in body["servers"] if s["name"] == "stuck")
+            self.assertFalse(stuck["can_retry"])
+            self.assertTrue(stuck["cloud"])
+        finally:
+            registry.remove("stuck")
+
+    def test_hetzner_token_not_stored_when_rejected_nor_echoed(self):
+        with mock.patch("vhdeploy.dashboard.save_token", side_effect=SystemExit("no")):
+            status, raw, *_ = self.http("POST", "/api/wizard/hetzner-token", {"token": "SECRET-T"}, cookie=self.login())
+        self.assertEqual(status, 400)
+        self.assertNotIn(b"SECRET-T", raw)
 
     def test_unknown_server_and_traversal(self):
         cookie = self.login()

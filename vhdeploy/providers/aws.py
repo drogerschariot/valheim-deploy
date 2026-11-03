@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+from pathlib import Path
 from typing import Any
 
 from .. import registry, ssh
@@ -47,9 +48,17 @@ class AWS(Provider):
     key = "aws"
     label = "Amazon Web Services (EC2)"
 
-    def collect(self, ui: Any, rec: dict[str, Any]) -> None:
+    def preflight(self) -> str | None:
         if not shutil.which("aws"):
-            raise SystemExit("The AWS CLI is needed: https://aws.amazon.com/cli/ then run `aws configure`.")
+            return "The AWS CLI is needed: https://aws.amazon.com/cli/ then run `aws configure`."
+        return super().preflight()
+
+    def wizard_options(self, params: dict[str, str]) -> dict[str, Any]:
+        want = sizing(int(params.get("players") or 4))
+        return {"recommended_gb": want, "default_region": "us-east-1",
+                "instance_types": [{"value": v, "label": l} for v, l in INSTANCE_TYPES[want]]}
+
+    def collect(self, ui: Any, rec: dict[str, Any]) -> None:
         region = ui.ask("aws_region", "AWS region (closest to your players)", "us-east-1")
         rec["resources"] = {"region": region}
         who = aws(rec, "sts", "get-caller-identity")
@@ -60,7 +69,7 @@ class AWS(Provider):
 
     def describe_cost(self, rec: dict[str, Any]) -> str:
         return (f"AWS bills for the {rec['resources']['instance_type']} instance, a {DISK_GB} GB disk, "
-                f"a public IP and outbound data until you run `./valheim destroy {rec['name']}`.")
+                "a public IP and outbound data until the server is deleted.")
 
     def create(self, ui: Any, rec: dict[str, Any]) -> None:
         res, name = rec["resources"], rec["name"]
@@ -69,14 +78,14 @@ class AWS(Provider):
 
         ui.say("Creating key pair, security group, instance and address at AWS...")
         aws(rec, "ec2", "import-key-pair", "--key-name", f"valheim-{name}",
-            "--public-key-material", f"fileb://{key}.pub")
+            "--public-key-material", f"fileb://{Path(key).as_posix()}.pub")
         res["key_name"] = f"valheim-{name}"
         registry.save(rec)
 
         vpcs = aws(rec, "ec2", "describe-vpcs", "--filters", "Name=isDefault,Values=true")["Vpcs"]
         if not vpcs:
             raise SystemExit(f"Region {res['region']} has no default VPC. Create one with "
-                             f"`aws ec2 create-default-vpc`, run `./valheim destroy {name}`, and start over.")
+                             "`aws ec2 create-default-vpc`, delete this server, and start over.")
         res["security_group_id"] = aws(
             rec, "ec2", "create-security-group", "--group-name", f"valheim-{name}",
             "--description", f"Valheim server {name}", "--vpc-id", vpcs[0]["VpcId"],

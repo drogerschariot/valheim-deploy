@@ -9,6 +9,14 @@ from .. import ssh
 from . import Provider
 
 
+def login_problem(rec: dict[str, Any]) -> str | None:
+    if not ssh.reachable(rec):
+        return f"Could not log in to {ssh.target(rec)}. Check the address, user and key."
+    if rec["ssh"]["user"] != "root" and ssh.run(rec, "sudo -n true", capture=True).returncode != 0:
+        return "That user cannot run sudo without a password, which the installer needs."
+    return None
+
+
 class Existing(Provider):
     key = "existing"
     label = "A Linux server I already have (Ubuntu, over SSH)"
@@ -29,10 +37,9 @@ class Existing(Provider):
         rec["settings"]["firewall_enabled"] = ui.confirm("manage_firewall", "Let the installer manage ufw?", False)
 
         ui.say("Testing the SSH login...")
-        if not ssh.reachable(rec):
-            raise SystemExit(f"Could not log in to {ssh.target(rec)}. Check the address, user and key.")
-        if rec["ssh"]["user"] != "root" and ssh.run(rec, "sudo -n true", capture=True).returncode != 0:
-            raise SystemExit("That user cannot run sudo without a password, which the installer needs.")
+        problem = login_problem(rec)
+        if problem:
+            raise SystemExit(problem)
         ui.ok("SSH login works.")
 
     def destroy(self, ui: Any, rec: dict[str, Any]) -> None:

@@ -10,6 +10,8 @@ BOLD, GOLD, RED, GREEN, OFF = "\033[1m", "\033[33m", "\033[31m", "\033[32m", "\0
 
 
 class UI:
+    show_info = True
+
     def __init__(self, answers: dict[str, Any] | None = None) -> None:
         self.answers = answers
 

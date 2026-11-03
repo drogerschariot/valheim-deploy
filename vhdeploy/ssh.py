@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import shlex
 import socket
 import subprocess
@@ -17,9 +18,9 @@ import time
 from pathlib import Path
 from typing import Any
 
-from . import registry
+from . import output, paths, registry
 
-HOST_DIR = Path(__file__).resolve().parent.parent / "host"
+HOST_DIR = paths.host_dir()
 HOST_FILES = ["a2s.py", "agent.py", "launcher.py", "install.py", "valheim-backup.sh", "valheim-update.sh"]
 
 
@@ -28,6 +29,11 @@ def generate_key(name: str) -> str:
     if not key.exists():
         subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", f"valheim-{name}", "-f", str(key)],
                        check=True)
+        if os.name == "nt":
+            # Windows OpenSSH refuses a key that inherits broad permissions.
+            subprocess.run(["icacls", str(key), "/inheritance:r", "/grant:r",
+                            f"{os.environ.get('USERNAME', '')}:F"],
+                           check=True, stdout=subprocess.DEVNULL)
     return str(key)
 
 
@@ -36,7 +42,7 @@ def options(rec: dict[str, Any]) -> list[str]:
     # A known_hosts per server: first contact is trusted, any later change of
     # host key fails, and the user's own known_hosts is left alone.
     known = registry.home() / "keys" / f"{rec['name']}.known_hosts"
-    opts = ["-p", str(s.get("port", 22)), "-o", f"UserKnownHostsFile={known}",
+    opts = ["-p", str(s.get("port", 22)), "-o", f'UserKnownHostsFile="{known.as_posix()}"',
             "-o", "StrictHostKeyChecking=accept-new", "-o", "BatchMode=yes",
             "-o", "ConnectTimeout=10", "-o", "LogLevel=ERROR"]
     if s.get("key"):
@@ -54,12 +60,11 @@ def sudo(rec: dict[str, Any]) -> str:
 
 def run(rec: dict[str, Any], command: str, capture: bool = False,
         timeout: float | None = None, stdin: bytes | None = None) -> subprocess.CompletedProcess:
-    kwargs: dict[str, Any] = {}
-    if capture:
-        kwargs = {"stdout": subprocess.PIPE, "stderr": subprocess.STDOUT, "text": True}
-    if stdin is not None:
-        kwargs["input"] = stdin
-    return subprocess.run(["ssh", *options(rec), target(rec), command], timeout=timeout, check=False, **kwargs)
+    argv = ["ssh", *options(rec), target(rec), command]
+    if not capture:
+        return subprocess.CompletedProcess(argv, output.stream(argv, stdin))
+    return subprocess.run(argv, timeout=timeout, check=False, stdout=subprocess.PIPE,
+                          stderr=subprocess.STDOUT, text=True)
 
 
 def reachable(rec: dict[str, Any]) -> bool:

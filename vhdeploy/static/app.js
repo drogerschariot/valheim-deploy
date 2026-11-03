@@ -246,19 +246,29 @@ async function doAction(action, confirmed = false) {
 // -- loading --------------------------------------------------------------
 
 async function refresh() {
-    if (!current) return;
+    // Nothing to show while the wizard or a job has the screen, and a server
+    // being deleted must not flash up as unreachable.
+    if (!current || $("content").hidden) return;
     const asked = current;
     try {
         const { status, body } = await api(serverPath("status"));
         if (asked !== current) return;      // the dropdown moved on meanwhile
         const off = $("offline");
-        if (body && body.service) {
+        const info = serverInfo();
+        if (info && info.status !== "installed") {
+            off.hidden = false;
+            off.textContent = info.can_retry
+                ? "Setup did not finish for this server. Use Retry install or Delete server below."
+                : "Setup did not finish for this server. Use Delete server below to remove anything it created.";
+            $("status-pill").className = "pill down";
+            $("status-text").textContent = "not set up";
+        } else if (body && body.service) {
             off.hidden = true;
             renderStatus(body);
         } else {
             off.hidden = false;
             off.textContent = `Can't reach this server: ${body.error || status}. ` +
-                `Try ./valheim doctor ${current} in a terminal.`;
+                (info && info.cloud ? "If your internet address changed, use Fix my IP below." : "Check that its host is on.");
             $("status-pill").className = "pill down";
             $("status-text").textContent = "unreachable";
         }
@@ -386,9 +396,15 @@ async function checkReach() {
 
 // -- servers --------------------------------------------------------------
 
+let SERVERS = [];
+const serverInfo = () => SERVERS.find((s) => s.name === current);
+
 function selectServer(name) {
     current = name;
     localStorage.setItem("server", name);
+    const info = serverInfo();
+    $("fix-ip").hidden = !(info && info.cloud);
+    $("retry-install").hidden = !(info && info.can_retry);
     $("reach-result").textContent = "";
     $("world-name").textContent = "";
     $("offline").hidden = true;
@@ -401,6 +417,7 @@ function selectServer(name) {
 async function loadServers() {
     const { body } = await api("/api/servers");
     const servers = body.servers || [];
+    SERVERS = servers;
     const select = $("server-select");
     select.innerHTML = "";
     servers.forEach((s) => {
@@ -409,10 +426,19 @@ async function loadServers() {
         option.textContent = `${s.server_name} (${s.name}, ${s.provider})`;
         select.appendChild(option);
     });
-    $("empty").hidden = servers.length > 0;
     $("content").hidden = servers.length === 0;
     select.hidden = servers.length === 0;
-    if (!servers.length) return;
+    $("status-pill").hidden = servers.length === 0;
+    if (!servers.length) {
+        current = null;
+        $("world-name").textContent = "";
+    }
+    const busy = servers.find((s) => s.job);
+    if (busy) followJob(busy.job, "Finishing " + busy.name);
+    if (!servers.length) {
+        if (!busy) openWizard();
+        return;
+    }
     const saved = localStorage.getItem("server");
     const pick = servers.some((s) => s.name === saved) ? saved : servers[0].name;
     select.value = pick;
@@ -451,9 +477,9 @@ $("list-add").onclick = () => {
 };
 $("logs-refresh").onclick = loadLogs;
 $("signout").onclick = async () => {
-    await api("/api/logout", { method: "POST" });
+    await api("/api/logout", { method: "POST", body: "{}" });
     window.location.reload();
 };
 
-loadServers();
+window.addEventListener("load", loadServers);
 setInterval(refresh, 5000);

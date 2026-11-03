@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import secrets
 import subprocess
 import sys
@@ -11,7 +12,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any
 
-from . import agent_client, registry, settings, ssh
+from . import __version__, agent_client, paths, registry, settings, ssh
 from .providers import get as provider, my_public_ip
 from .ui import UI
 
@@ -119,10 +120,9 @@ def wait_ready(ui: UI, rec: dict[str, Any]) -> bool:
         agent.tunnels.close()
 
 
-def cmd_new(args: argparse.Namespace) -> int:
-    answers = json.load(open(args.answers, encoding="utf-8")) if args.answers else None
-    ui = UI(answers)
-
+def create_server(ui: UI) -> int:
+    """The whole creation flow. The terminal drives this with prompts, the
+    browser with a filled-in answers dict, so there is one set of rules."""
     ui.heading("Valheim server setup")
     ui.warn(ADVANCED_NOTICE)
     if not ui.confirm("understood", "I understand and want to continue", False):
@@ -132,6 +132,9 @@ def cmd_new(args: argparse.Namespace) -> int:
     key = ui.choose("host", "Where should this server run?",
                     [(k, provider(k).label) for k in HOST_CHOICES])
     prov = provider(key)
+    problem = prov.preflight()
+    if problem:
+        raise SystemExit(problem)
     name = ui.ask("name", "Short name for this server (lowercase, used in commands)", "",
                   check=settings.check_slug)
     if registry.path_for(name).exists():
@@ -164,17 +167,38 @@ def cmd_new(args: argparse.Namespace) -> int:
     registry.save(rec)
     prov.create(ui, rec)
     registry.save(rec)
-    prov.install(ui, rec)
+    finish_install(ui, rec)
+    return 0
+
+
+def finish_install(ui: UI, rec: dict[str, Any]) -> None:
+    provider(rec["provider"]).install(ui, rec)
     rec["status"] = "installed"
     registry.save(rec)
-
     if wait_ready(ui, rec):
         ui.ok("\nThe server is up.")
     else:
-        ui.warn("\nThe server has not reported ready yet. It may still be loading; check the "
-                "Logs tab in `./valheim dashboard`.")
-    print_info(ui, rec)
-    return 0
+        ui.warn("\nThe server has not reported ready yet. It may still be loading; check its logs "
+                "on the dashboard.")
+    if ui.show_info:
+        print_info(ui, rec)
+
+
+def destroy_server(ui: UI, rec: dict[str, Any]) -> None:
+    provider(rec["provider"]).destroy(ui, rec)
+    registry.remove(rec["name"])
+    ui.ok(f"{rec['name']} is gone.")
+
+
+def allow_current_ip(ui: UI, rec: dict[str, Any]) -> None:
+    ip = my_public_ip()
+    provider(rec["provider"]).allow_ip(ui, rec, ip)
+    ui.ok(f"SSH is now allowed from {ip} only.")
+
+
+def cmd_new(args: argparse.Namespace) -> int:
+    answers = json.load(open(args.answers, encoding="utf-8")) if args.answers else None
+    return create_server(UI(answers))
 
 
 def print_info(ui: UI, rec: dict[str, Any]) -> None:
@@ -190,7 +214,7 @@ def print_info(ui: UI, rec: dict[str, Any]) -> None:
     if rec.get("ssh", {}).get("host"):
         key = f"-i {rec['ssh']['key']} " if rec["ssh"].get("key") else ""
         ui.say(f"  SSH:           ssh {key}-p {rec['ssh'].get('port', 22)} {ssh.target(rec)}")
-    ui.say("  Dashboard:     ./valheim dashboard")
+    ui.say(f"  Dashboard:     {paths.command()} dashboard")
     ui.say("\n  To join: in Valheim choose Start Game > Join Game > Add server, and enter the join address.")
     if s["crossplay"]:
         ui.say("  Crossplay servers also show a join code in the dashboard's Connect tab.")
@@ -199,14 +223,14 @@ def print_info(ui: UI, rec: dict[str, Any]) -> None:
         ui.heading("You still need to do this before players can connect")
         for note in notes:
             ui.say(f"  [ ] {note}")
-    ui.say(f"\n  Check it from outside: ./valheim doctor {rec['name']}")
+    ui.say(f"\n  Check it from outside: {paths.command()} doctor {rec['name']}")
     ui.say(f"  {prov.describe_cost(rec)}")
 
 
 def cmd_list(args: argparse.Namespace) -> int:
     servers = registry.all_servers()
     if not servers:
-        print("No servers yet. Create one with: ./valheim new")
+        print(f"No servers yet. Create one with: {paths.command()} new")
         return 0
     print(f"{'NAME':<20}{'HOST':<12}{'JOIN ADDRESS':<28}STATUS")
     for r in servers:
@@ -290,10 +314,7 @@ def cmd_backups(args: argparse.Namespace) -> int:
 
 
 def cmd_allow_my_ip(args: argparse.Namespace) -> int:
-    rec = registry.load(args.name)
-    ip = my_public_ip()
-    provider(rec["provider"]).allow_ip(UI(), rec, ip)
-    print(f"SSH is now allowed from {ip} only.")
+    allow_current_ip(UI(), registry.load(args.name))
     return 0
 
 
@@ -304,7 +325,7 @@ def doctor_checks(rec: dict[str, Any]) -> list[tuple[str, bool, str]]:
     port = rec["settings"]["port"]
     if rec["provider"] != "local":
         ok = ssh.reachable(rec)
-        hint = "Run ./valheim allow-my-ip NAME if your IP changed." if rec["provider"] in ("aws", "hetzner") \
+        hint = f"Run {paths.command()} allow-my-ip {rec['name']} if your IP changed." if rec["provider"] in ("aws", "hetzner") \
             else "Check the host is on and your SSH login still works."
         checks.append(("SSH login", ok, "" if ok else hint))
     agent, status = client(), {}
@@ -319,7 +340,7 @@ def doctor_checks(rec: dict[str, Any]) -> list[tuple[str, bool, str]]:
         agent.tunnels.close()
     service = status.get("service", {})
     checks.append(("Game running", service.get("active") == "active",
-                   "" if service.get("active") == "active" else "Start it: ./valheim start NAME"))
+                   "" if service.get("active") == "active" else f"Start it: {paths.command()} start {rec['name']}"))
     checks.append(("World loaded", bool(service.get("ready")), "" if service.get("ready")
                    else "It may still be loading; check the logs in the dashboard."))
     if rec["settings"]["crossplay"]:
@@ -358,9 +379,7 @@ def cmd_destroy(args: argparse.Namespace) -> int:
     if input(f"Type {rec['name']} to confirm: ").strip() != rec["name"]:
         ui.say("Names did not match. Nothing was deleted.")
         return 1
-    prov.destroy(ui, rec)
-    registry.remove(rec["name"])
-    ui.ok(f"{rec['name']} is gone.")
+    destroy_server(ui, rec)
     return 0
 
 
@@ -371,7 +390,8 @@ def cmd_dashboard(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="valheim", description="Create and run Valheim dedicated servers.")
-    sub = parser.add_subparsers(dest="command", required=True)
+    parser.add_argument("--version", action="version", version=__version__)
+    sub = parser.add_subparsers(dest="command")
 
     def add(name: str, func: Any, help_text: str, named: bool = True) -> argparse.ArgumentParser:
         p = sub.add_parser(name, help=help_text)
@@ -402,11 +422,28 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def run_default() -> int:
+    """Double-clicked with no arguments: open the dashboard. In a packaged app
+    the console closes the moment we exit, so hold any error on screen."""
+    from .dashboard import serve
+    try:
+        return serve(8456)
+    except (Exception, SystemExit) as exc:
+        print(f"Could not start: {exc}")
+        if paths.is_frozen():
+            input("Press Enter to close.")
+        return 1
+
+
 def main() -> int:
+    if os.name == "nt":
+        os.system("")  # turns on colour handling in the Windows console
     args = build_parser().parse_args()
     try:
+        if not args.command:
+            return run_default()
         return args.func(args)
     except KeyboardInterrupt:
-        print("\nInterrupted. If a cloud server was being created, `./valheim list` shows it, "
-              "and `./valheim destroy NAME` removes it.")
+        print(f"\nInterrupted. If a cloud server was being created, `{paths.command()} list` shows it, "
+              f"and `{paths.command()} destroy NAME` removes it.")
         return 130

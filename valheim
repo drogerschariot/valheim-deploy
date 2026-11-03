@@ -3,8 +3,8 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-if sys.version_info < (3, 9):
-    sys.exit("Python 3.9 or newer is required.")
+if sys.version_info < (3, 12):
+    sys.exit("Python 3.12 or newer is required.")
 
 from vhdeploy.cli import main  # noqa: E402
 
