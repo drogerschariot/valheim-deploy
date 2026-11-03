@@ -21,24 +21,36 @@ from typing import Any
 from .. import registry, ssh
 from . import Provider, my_public_ip, sizing
 
-TOKEN_URL = "https://console.hetzner.cloud (project > Security > API tokens, Read & Write)"
+GUIDE = {
+    "service": "Hetzner",
+    "signup": [
+        {"text": "Create a Hetzner account and confirm your email address.",
+         "link": "https://accounts.hetzner.com/signUp"},
+        {"text": "Hetzner may ask for a payment method or proof of identity before you can create "
+                 "servers. This can take a little while to be approved."},
+        {"text": "Open the Cloud Console and create a project, for example \"Valheim\".",
+         "link": "https://console.hetzner.cloud"},
+    ],
+    "credentials": [
+        {"text": "In the Cloud Console, open your project, then Security, then API tokens.",
+         "link": "https://console.hetzner.cloud"},
+        {"text": "Choose \"Generate API token\", name it valheim-deploy, and give it Read & Write permission."},
+        {"text": "Copy the token. Hetzner shows it only once. Paste it here."},
+    ],
+    "fields": [{"key": "hcloud_token", "label": "Hetzner API token", "secret": True}],
+    "stored": "Kept only on this computer, in the app's credentials file. Delete the token in the "
+              "Cloud Console to revoke it.",
+}
 
 
 def api_base() -> str:
     return os.environ.get("HCLOUD_API", "https://api.hetzner.cloud/v1")
 
 
-def token(ui: Any = None) -> str:
+def token() -> str:
     value = os.environ.get("HCLOUD_TOKEN") or registry.credential("hcloud_token")
-    if value:
-        return value
-    if ui is None:
-        raise SystemExit("No Hetzner API token. Set HCLOUD_TOKEN.")
-    ui.say(f"Create an API token at {TOKEN_URL}.")
-    value = ui.secret("hcloud_token", "Hetzner API token")
     if not value:
-        raise SystemExit("A token is required.")
-    registry.store_credential("hcloud_token", value)
+        raise SystemExit("No Hetzner API token. Connect your Hetzner account in the setup wizard first.")
     return value
 
 
@@ -63,6 +75,8 @@ def api(method: str, path: str, body: Any = None, tok: str | None = None) -> Any
 
 def save_token(value: str) -> None:
     """Keep a token only after Hetzner has accepted it."""
+    if not value:
+        raise SystemExit("Enter the token.")
     api("GET", "/locations", tok=value)
     registry.store_credential("hcloud_token", value)
 
@@ -94,14 +108,35 @@ class Hetzner(Provider):
     key = "hetzner"
     label = "Hetzner Cloud (recommended: cheapest always-on option)"
 
-    def wizard_options(self, params: dict[str, str]) -> dict[str, Any]:
+    guide = GUIDE
+
+    def connected(self) -> str | None:
         if not (os.environ.get("HCLOUD_TOKEN") or registry.credential("hcloud_token")):
-            return {"needs_token": True, "token_help": TOKEN_URL}
+            return None
+        try:
+            api("GET", "/locations")
+        except SystemExit:
+            return None  # revoked or deleted: ask again
+        return "your Hetzner project (by its API token)"
+
+    def connect(self, fields: dict[str, str]) -> str:
+        value = fields.get("hcloud_token", "").strip()
+        try:
+            save_token(value)
+        except SystemExit as exc:
+            raise SystemExit("Hetzner did not accept that token. Check it was copied whole and "
+                             "has Read & Write permission.") from exc
+        return "your Hetzner project (by its API token)"
+
+    def wizard_options(self, params: dict[str, str]) -> dict[str, Any]:
+        account = self.connected()
+        if not account:
+            return {"needs_connect": True, "guide": GUIDE}
         locations = api("GET", "/locations")["locations"]
         location = params.get("location") or locations[0]["name"]
         want = sizing(int(params.get("players") or 4))
         return {
-            "needs_token": False, "recommended_gb": want, "location": location,
+            "needs_connect": False, "connected": account, "guide": GUIDE, "recommended_gb": want, "location": location,
             "locations": [{"value": l["name"], "label": f"{l['city']}, {l['country']} ({l['name']})"}
                           for l in locations],
             "plans": [{"value": p["name"],
@@ -111,7 +146,7 @@ class Hetzner(Provider):
         }
 
     def collect(self, ui: Any, rec: dict[str, Any]) -> None:
-        token(ui)
+        self.walk_through(ui)
         locations = api("GET", "/locations")["locations"]
         location = ui.choose("hcloud_location", "Which location? Pick the closest to your players.",
                              [(l["name"], f"{l['city']}, {l['country']} ({l['name']})") for l in locations])

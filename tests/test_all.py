@@ -11,7 +11,7 @@ os.environ["VALHEIM_DEPLOY_HOME"] = TMP
 
 import a2s, agent, launcher  # noqa: E402
 from vhdeploy import agent_client, cli, dashboard, jobs, output, paths, registry, settings, ssh  # noqa: E402
-from vhdeploy.providers import aws as aws_mod, extract_tar_stream, hetzner, sizing  # noqa: E402
+from vhdeploy.providers import aws as aws_mod, awsapi, existing, extract_tar_stream, hetzner, sizing  # noqa: E402
 from vhdeploy.ui import UI  # noqa: E402
 
 
@@ -321,53 +321,159 @@ class Hetzner(unittest.TestCase):
         registry.remove("hz")
 
 
+class FakeEC2(BaseHTTPRequestHandler):
+    """Answers the EC2 and STS query APIs with canned XML, and records calls."""
+    calls = []
+    arn = "arn:aws:iam::123456789012:user/valheim-deploy"
+    deny_ec2 = False
+    NS = 'xmlns="http://ec2.amazonaws.com/doc/2016-11-15/"'
+
+    def log_message(self, *a):
+        pass
+
+    def do_POST(self):
+        from urllib.parse import parse_qsl
+        body = self.rfile.read(int(self.headers["Content-Length"])).decode()
+        params = dict(parse_qsl(body))
+        FakeEC2.calls.append((params.pop("Action"), params, self.headers["Authorization"]))
+        action = FakeEC2.calls[-1][0]
+        if action == "GetCallerIdentity":
+            xml = (f'<GetCallerIdentityResponse xmlns="https://sts.amazonaws.com/doc/2011-06-15/"><GetCallerIdentityResult>'
+                   f'<Arn>{FakeEC2.arn}</Arn><Account>123456789012</Account></GetCallerIdentityResult></GetCallerIdentityResponse>')
+        elif FakeEC2.deny_ec2:
+            self.send_response(403)
+            err = b"<Response><Errors><Error><Code>UnauthorizedOperation</Code><Message>no</Message></Error></Errors></Response>"
+            self.send_header("Content-Length", str(len(err)))
+            self.end_headers()
+            self.wfile.write(err)
+            return
+        else:
+            state = "terminated" if any(c[0] == "TerminateInstances" for c in FakeEC2.calls) else "running"
+            xml = {
+                "DescribeRegions": "<regionInfo><item><regionName>us-east-1</regionName></item><item><regionName>eu-west-1</regionName></item></regionInfo>",
+                "DescribeVpcs": "<vpcSet><item><vpcId>vpc-1</vpcId></item></vpcSet>",
+                "CreateSecurityGroup": "<groupId>sg-1</groupId>",
+                "DescribeImages": ("<imagesSet><item><imageId>ami-old</imageId><creationDate>2025-01-01T00:00:00.000Z</creationDate></item>"
+                                   "<item><imageId>ami-new</imageId><creationDate>2026-01-01T00:00:00.000Z</creationDate></item></imagesSet>"),
+                "RunInstances": "<instancesSet><item><instanceId>i-1</instanceId></item></instancesSet>",
+                "DescribeInstances": f"<reservationSet><item><instancesSet><item><instanceId>i-1</instanceId><instanceState><name>{state}</name></instanceState></item></instancesSet></item></reservationSet>",
+                "AllocateAddress": "<publicIp>203.0.113.20</publicIp><allocationId>eip-1</allocationId>",
+                "DescribeSecurityGroups": ("<securityGroupInfo><item><ipPermissions><item><fromPort>22</fromPort><ipRanges>"
+                                           "<item><cidrIp>1.1.1.1/32</cidrIp></item></ipRanges></item></ipPermissions></item></securityGroupInfo>"),
+            }.get(action, "<return>true</return>")
+            xml = f"<{action}Response {FakeEC2.NS}><requestId>r</requestId>{xml}</{action}Response>"
+        data = xml.encode()
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+
 class AWS(unittest.TestCase):
-    """A fake `aws` on PATH records every call."""
+    @classmethod
+    def setUpClass(cls):
+        cls.srv = HTTPServer(("127.0.0.1", 0), FakeEC2)
+        threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
+        cls.env = mock.patch.dict(os.environ, {"AWS_ENDPOINT_URL": f"http://127.0.0.1:{cls.srv.server_port}",
+                                               "AWS_SHARED_CREDENTIALS_FILE": str(Path(TMP) / "no-aws-credentials")})
+        cls.env.start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.env.stop()
+        cls.srv.shutdown()
 
     def setUp(self):
-        self.bin = Path(tempfile.mkdtemp())
-        self.log = self.bin / "calls.log"
-        shim = self.bin / "aws.py"
-        launcher_name = "aws.cmd" if os.name == "nt" else "aws"
-        launcher_file = self.bin / launcher_name
-        if os.name == "nt":
-            launcher_file.write_text(f'@"{sys.executable}" "{shim}" %*\r\n')
-        else:
-            launcher_file.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{shim}" "$@"\n')
-            launcher_file.chmod(0o755)
-        shim.write_text(f'''#!{sys.executable}
-import json, sys
-a = sys.argv[1:]
-open({str(self.log)!r}, "a").write(" ".join(a) + "\\n")
-v = a[a.index("--output") + 2:]
-out = {{"describe-vpcs": {{"Vpcs": [{{"VpcId": "vpc-1"}}]}}, "create-security-group": {{"GroupId": "sg-1"}},
-       "get-parameter": {{"Parameter": {{"Value": "ami-1"}}}}, "run-instances": {{"Instances": [{{"InstanceId": "i-1"}}]}},
-       "allocate-address": {{"AllocationId": "eip-1", "PublicIp": "203.0.113.20"}},
-       "describe-security-groups": {{"SecurityGroups": [{{"IpPermissions": [{{"FromPort": 22, "IpRanges": [{{"CidrIp": "1.1.1.1/32"}}]}}]}}]}}}}
-print(json.dumps(out.get(v[1], {{}})))
-''')
-        self.path = mock.patch.dict(os.environ, {"PATH": f"{self.bin}{os.pathsep}{os.environ['PATH']}"})
-        self.path.start()
+        FakeEC2.calls.clear()
+        FakeEC2.arn = "arn:aws:iam::123456789012:user/valheim-deploy"
+        FakeEC2.deny_ec2 = False
+        registry.store_credential("aws", {"key_id": "AKIDTEST", "secret": "SECRET-AWS"})
 
     def tearDown(self):
-        self.path.stop()
+        registry.store_credential("aws", None)
+
+    def test_signature_matches_the_aws_cli(self):
+        # Captured from aws-cli 2 against a local endpoint, with AWS's documented example key.
+        headers = {"Content-Type": "application/x-www-form-urlencoded; charset=utf-8",
+                   "Host": "127.0.0.1:56610", "X-Amz-Date": "20261103T040859Z"}
+        body = b"Action=DescribeVpcs&Version=2016-11-15&Filter.1.Name=isDefault&Filter.1.Value.1=true"
+        self.assertEqual(
+            awsapi.sign("POST", "http://127.0.0.1:56610/", headers, body, "eu-west-1", "ec2", "AKIDEXAMPLE",
+                        "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY", "20261103T040859Z"),
+            "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20261103/eu-west-1/ec2/aws4_request, "
+            "SignedHeaders=content-type;host;x-amz-date, "
+            "Signature=3831a509d72847a0262052a000062026dc941216390a19d0a234ca5d7e56a0ae")
+
+    def test_flatten(self):
+        self.assertEqual(awsapi.flatten("Filter", [{"Name": "a", "Value": ["x", "y"]}]),
+                         {"Filter.1.Name": "a", "Filter.1.Value.1": "x", "Filter.1.Value.2": "y"})
 
     def test_lifecycle(self):
         rec = {"name": "aw", "provider": "aws", "players": 4, "settings": base_settings(), "secrets": {},
                "resources": {"region": "us-east-1", "instance_type": "t3.medium"}}
         prov = aws_mod.AWS()
-        with mock.patch("vhdeploy.providers.aws.my_public_ip", return_value="198.51.100.4"):
+        with mock.patch("vhdeploy.providers.aws.my_public_ip", return_value="198.51.100.4"), \
+             mock.patch("vhdeploy.providers.aws.time.sleep"):
             prov.create(UI({}), rec)
-        self.assertEqual(rec["ssh"]["user"], "ubuntu")
-        self.assertEqual(rec["address"], "203.0.113.20")
-        prov.allow_ip(UI({}), rec, "198.51.100.9")
-        prov.destroy(UI({}), rec)
-        log = self.log.read_text()
-        self.assertIn('"CidrIp": "198.51.100.4/32"', log)
-        self.assertNotIn('"FromPort": 22, "ToPort": 22, "IpRanges": [{"CidrIp": "0.0.0.0/0"', log)
-        order = [log.index(v) for v in ("terminate-instances", "release-address", "delete-security-group", "delete-key-pair")]
+            self.assertEqual(rec["ssh"]["user"], "ubuntu")
+            self.assertEqual(rec["address"], "203.0.113.20")
+            run = next(p for a, p, _ in FakeEC2.calls if a == "RunInstances")
+            self.assertEqual(run["ImageId"], "ami-new")  # newest Ubuntu image
+            self.assertEqual(run["MetadataOptions.HttpTokens"], "required")
+            ssh_rules = [p for a, p, _ in FakeEC2.calls
+                         if a == "AuthorizeSecurityGroupIngress" and p["IpPermissions.1.FromPort"] == "22"]
+            self.assertEqual([r["IpPermissions.1.IpRanges.1.CidrIp"] for r in ssh_rules], ["198.51.100.4/32"])
+            prov.allow_ip(UI({}), rec, "198.51.100.9")
+            prov.destroy(UI({}), rec)
+        actions = [a for a, *_ in FakeEC2.calls]
+        self.assertIn("RevokeSecurityGroupIngress", actions)
+        order = [actions.index(v) for v in ("TerminateInstances", "ReleaseAddress", "DeleteSecurityGroup", "DeleteKeyPair")]
         self.assertEqual(order, sorted(order))
+        self.assertTrue(all("AKIDTEST/" in auth for *_, auth in FakeEC2.calls))
         registry.remove("aw")
+
+    def test_connect_keeps_only_working_iam_keys(self):
+        registry.store_credential("aws", None)
+        FakeEC2.arn = "arn:aws:iam::123456789012:root"
+        with self.assertRaisesRegex(SystemExit, "root"):
+            aws_mod.connect({"aws_key_id": "AKIDROOT", "aws_secret": "s"})
+        FakeEC2.arn = "arn:aws:iam::123456789012:user/valheim-deploy"
+        FakeEC2.deny_ec2 = True
+        with self.assertRaisesRegex(SystemExit, "AmazonEC2FullAccess"):
+            aws_mod.connect({"aws_key_id": "AKIDNOEC2", "aws_secret": "s"})
+        self.assertIsNone(registry.credential("aws"))
+        FakeEC2.deny_ec2 = False
+        self.assertEqual(aws_mod.connect({"aws_key_id": "AKIDOK", "aws_secret": "s"}),
+                         "AWS account 123456789012, user valheim-deploy")
+        self.assertEqual(registry.credential("aws")["key_id"], "AKIDOK")
+
+    def test_saved_key_wins_over_environment(self):
+        with mock.patch.dict(os.environ, {"AWS_ACCESS_KEY_ID": "AKIDENV", "AWS_SECRET_ACCESS_KEY": "e"}):
+            self.assertEqual(awsapi.credentials()[0]["key_id"], "AKIDTEST")
+            registry.store_credential("aws", None)
+            self.assertEqual(awsapi.credentials()[0]["key_id"], "AKIDENV")
+
+    def test_wizard_options_guide_until_connected(self):
+        registry.store_credential("aws", None)
+        opts = aws_mod.AWS().wizard_options({})
+        self.assertTrue(opts["needs_connect"])
+        self.assertTrue(opts["guide"]["signup"] and opts["guide"]["credentials"])
+        registry.store_credential("aws", {"key_id": "AKIDTEST", "secret": "x"})
+        opts = aws_mod.AWS().wizard_options({"players": "4"})
+        self.assertFalse(opts["needs_connect"])
+        self.assertEqual([r["value"] for r in opts["regions"]], ["eu-west-1", "us-east-1"])
+
+    def test_scripted_run_without_an_account_stops(self):
+        registry.store_credential("aws", None)
+        with self.assertRaisesRegex(SystemExit, "Connect your AWS account"):
+            aws_mod.AWS().walk_through(UI({}))
+
+
+class Existing(unittest.TestCase):
+    def test_make_key_for_a_new_vps(self):
+        made = existing.make_key()
+        self.assertTrue(made["public_key"].startswith("ssh-ed25519 "))
+        self.assertTrue(Path(made["path"]).exists())
 
 
 class Wizard(unittest.TestCase):
@@ -482,7 +588,7 @@ class Dashboard(unittest.TestCase):
         self.assertEqual(c.getresponse().status, 415)
 
     def test_new_routes_require_sign_in(self):
-        for path in ("/api/servers", "/api/servers/alpha/destroy", "/api/wizard/hetzner-token"):
+        for path in ("/api/servers", "/api/servers/alpha/destroy", "/api/wizard/connect", "/api/wizard/ssh-key"):
             self.assertEqual(self.http("POST", path, {})[0], 401, path)
         self.assertEqual(self.http("GET", "/api/wizard/options")[0], 401)
         self.assertEqual(self.http("GET", "/api/jobs/x")[0], 401)
@@ -530,11 +636,14 @@ class Dashboard(unittest.TestCase):
         finally:
             registry.remove("stuck")
 
-    def test_hetzner_token_not_stored_when_rejected_nor_echoed(self):
-        with mock.patch("vhdeploy.dashboard.save_token", side_effect=SystemExit("no")):
-            status, raw, *_ = self.http("POST", "/api/wizard/hetzner-token", {"token": "SECRET-T"}, cookie=self.login())
+    def test_rejected_credentials_are_not_stored_nor_echoed(self):
+        cookie = self.login()
+        with mock.patch("vhdeploy.providers.hetzner.api", side_effect=SystemExit("Hetzner refused: SECRET-T")):
+            status, raw, *_ = self.http("POST", "/api/wizard/connect", {"host": "hetzner", "hcloud_token": "SECRET-T"}, cookie=cookie)
         self.assertEqual(status, 400)
         self.assertNotIn(b"SECRET-T", raw)
+        self.assertIsNone(registry.credential("hcloud_token"))
+        self.assertEqual(self.http("POST", "/api/wizard/connect", {"host": "local"}, cookie=cookie)[0], 400)
 
     def test_unknown_server_and_traversal(self):
         cookie = self.login()

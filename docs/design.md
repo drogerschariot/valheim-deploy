@@ -49,6 +49,18 @@ double-clicked. The browser wizard only collects answers: it submits them to
 `cli.create_server` through the same `UI(answers)` path as the terminal, so the
 rules exist once.
 
+**AWS through a built-in client, not the CLI.** Installing and configuring the
+`aws` CLI is too much to ask of someone who wants a game server, and cannot be
+done from a browser. `providers/awsapi.py` signs EC2 and STS query requests
+itself, so a user pastes an IAM access key and nothing else. The image comes from
+DescribeImages rather than an SSM parameter, so the key needs only
+AmazonEC2FullAccess. Root keys are refused.
+
+**Guided accounts.** A provider that needs an account carries a `guide`: steps to
+make one, steps to get the key, and the fields to ask for. The terminal and the
+browser both show it, and credentials are checked with the provider before they
+are saved.
+
 **Long work runs as jobs.** Creating a server can take many minutes, so it runs on
 a thread with captured output (`jobs.py`, `output.py`) and the page polls it. Only
 one job runs per server. A job's log never includes the closing summary, because
@@ -109,7 +121,8 @@ endpoints, and Hetzner and AWS against fake backends.
 | Update game, Fix my IP and Retry install buttons | Endpoints unit tested, not clicked through |
 | Real Steam download and the real Valheim binary | **Not yet run through this repo** |
 | Hetzner API | **Fake backend only.** Request shapes come from third-party docs and client libraries |
-| AWS | **Fake `aws` command only.** No real resources have been created |
+| AWS | **Fake EC2 endpoint only.** Request signing matches the `aws` CLI byte for byte for EC2 and STS. Query parameter names and response shapes come from the EC2 API reference. No real resources have been created |
+| Account walk-throughs | Endpoints and the connect checks are unit tested. The steps and links have not been followed with a new account |
 | Real x86-64 Ubuntu host | **Not yet run** |
 | Windows use: icacls key permissions, paths with spaces, Docker Desktop, SSH | **Not run on a real PC** |
 | Crossplay | Join-code parsing is tested against an assumed log line, not real output |

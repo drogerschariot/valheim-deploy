@@ -1,32 +1,59 @@
 # Getting started
 
-Open the app, and the setup page opens in your browser. These are the things to
-have ready for each place you can host. If you get stuck on one, try Hetzner: it
-needs the least setup.
+Open the app, and the setup page opens in your browser. It asks where to host,
+and for Hetzner, AWS or a rented server it asks whether you already have an
+account. If you don't, it walks you through making one, then through getting the
+key or token it needs, with links to each page. This page is the same steps, to
+read ahead. If you get stuck on one, try Hetzner: it needs the least setup.
+
+Keys and tokens you paste are checked with the provider straight away, and kept
+only on your computer, in `credentials.json` in the app's folder
+(`~/.valheim-deploy`, or `%USERPROFILE%\.valheim-deploy` on Windows). Delete the
+key or token at the provider to revoke it.
 
 ## Hetzner Cloud (recommended)
 
-You need a Hetzner account with a payment method.
-
-1. Sign in at [console.hetzner.cloud](https://console.hetzner.cloud) and open or create a project.
-2. Go to **Security > API tokens** and generate a token with **Read & Write** access.
-3. In the app, choose **Hetzner Cloud** and paste the token when asked.
-4. Pick the location closest to your players and a plan. Prices shown are live.
+1. [Create a Hetzner account](https://accounts.hetzner.com/signUp). Hetzner may ask
+   for a payment method or proof of identity before you can create servers.
+2. In the [Cloud Console](https://console.hetzner.cloud), create a project.
+3. In the project, go to **Security > API tokens** and generate a token with
+   **Read & Write** access. Hetzner shows it only once.
+4. In the app, choose **Hetzner Cloud**, paste the token and press **Connect**.
+5. Pick the location closest to your players and a plan. Prices shown are live.
 
 The firewall is done for you. Billing runs until you press **Delete server**;
 stopping the game does not stop it.
 
 ## AWS
 
-1. Install the [AWS CLI](https://aws.amazon.com/cli/).
-2. In a terminal, run `aws configure` and enter your access keys, or sign in with `aws sso login`.
-3. Restart the app, then choose **Amazon Web Services**.
+No AWS tools need installing.
 
-The account needs permission to manage EC2 and read SSM parameters, and the region
-needs a default VPC. The firewall is done for you. AWS usually costs noticeably
-more than Hetzner for a server that runs all the time.
+1. [Create an AWS account](https://portal.aws.amazon.com/billing/signup). It needs an
+   email address, a phone number and a payment card, and activation can take a while.
+2. Recommended: turn on multi-factor authentication for the root user, and set a
+   [budget alert](https://console.aws.amazon.com/billing/home#/budgets).
+3. In IAM, [create a user](https://console.aws.amazon.com/iam/home#/users/create)
+   called `valheim-deploy` without console access. Choose **Attach policies
+   directly** and tick **AmazonEC2FullAccess**.
+4. Open the user, then **Security credentials > Create access key**, with the use
+   case **Local code**. Copy the access key ID and the secret. AWS shows the secret
+   only once.
+5. In the app, choose **Amazon Web Services**, paste both and press **Connect**.
 
-## A Linux server you already have
+The app refuses the root user's keys, and keys that cannot use EC2. If you set
+`AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`, or have a `default` profile in
+`~/.aws/credentials`, the app uses those until you connect a key in the wizard.
+AWS SSO logins are not supported.
+
+The region needs a default VPC, which new accounts have. The firewall is done for
+you. AWS usually costs noticeably more than Hetzner for a server that runs all the
+time.
+
+## A Linux server you already have, or rent
+
+For a VPS from another provider, such as DigitalOcean, Akamai Linode, Vultr or
+OVHcloud, answer **No, help me rent one**. The app lists what to choose and makes
+an SSH key for you to paste into the provider's form.
 
 You need:
 

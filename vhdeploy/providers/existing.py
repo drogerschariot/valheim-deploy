@@ -3,10 +3,29 @@ from any provider. All this needs is SSH."""
 
 from __future__ import annotations
 
+import secrets
+from pathlib import Path
 from typing import Any
 
 from .. import ssh
-from . import Provider
+from . import Provider, show_steps
+
+VPS_STEPS = [
+    {"text": "Rent a virtual server (VPS) from any provider, for example DigitalOcean, Akamai Linode, "
+             "Vultr or OVHcloud. Hetzner and AWS have their own option, which does every step for you."},
+    {"text": "Choose Ubuntu 24.04 on x86-64 (also called AMD64 or Intel, not ARM), with at least 4 GB of RAM."},
+    {"text": "When it asks for an SSH key, paste the public key from \"Make a key\" below. The login "
+             "user is usually root."},
+    {"text": "If the provider has a firewall, allow UDP 2456-2457 in from anywhere. Those are the game "
+             "ports; the summary at the end confirms them."},
+    {"text": "When it is running, continue and enter its public IP address."},
+]
+
+
+def make_key() -> dict[str, str]:
+    """A fresh key pair for a server the user is about to rent."""
+    path = ssh.generate_key(f"byo-{secrets.token_hex(3)}")
+    return {"path": path, "public_key": Path(f"{path}.pub").read_text().strip()}
 
 
 def login_problem(rec: dict[str, Any]) -> str | None:
@@ -22,13 +41,23 @@ class Existing(Provider):
     label = "A Linux server I already have (Ubuntu, over SSH)"
     needs_network_setup = True
 
+    def wizard_options(self, params: dict[str, str]) -> dict[str, Any]:
+        return {"vps_steps": VPS_STEPS}
+
     def collect(self, ui: Any, rec: dict[str, Any]) -> None:
+        made = None
+        if not ui.scripted and not ui.confirm("has_server", "Do you already have a Linux server for this?", True):
+            show_steps(ui, "Rent a server", VPS_STEPS)
+            made = make_key()
+            ui.say(f"\nPaste this public key when the provider asks for an SSH key:\n\n{made['public_key']}\n")
+            ui.ask("server_ready", "Press Enter when the server is running", "ready")
         ui.say("Needs: x86-64 Ubuntu 20.04+, at least 4 GB of RAM and 10 GB of free disk, and an SSH")
         ui.say("login that is root or has passwordless sudo. Set that up before continuing.")
         host = ui.ask("ssh_host", "SSH address (IP or hostname)")
         user = ui.ask("ssh_user", "SSH user", "root")
         port = int(ui.ask("ssh_port", "SSH port", "22"))
-        key = ui.ask("ssh_key", "Path to the SSH private key (- uses your ssh-agent/default key)", "-")
+        key = ui.ask("ssh_key", "Path to the SSH private key (- uses your ssh-agent/default key)",
+                     made["path"] if made else "-")
         rec["ssh"] = {"host": host, "user": user, "port": port, "key": "" if key == "-" else key}
         rec["address"] = ui.ask("public_address", "Public IP or DNS name players will join", host)
         ui.say("\nThe installer can turn on ufw with default-deny inbound, opening only SSH and the")

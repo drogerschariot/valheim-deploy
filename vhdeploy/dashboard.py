@@ -28,8 +28,7 @@ from urllib.parse import parse_qs, urlparse
 from . import __version__, agent_client, cli, host_a2s, paths, registry, settings, ssh
 from .jobs import Busy, Job, Jobs
 from .providers import get as provider
-from .providers.existing import login_problem
-from .providers.hetzner import save_token
+from .providers.existing import login_problem, make_key
 
 STATIC_DIR = paths.static_dir()
 # A fixed set, not a filename pattern. Making something readable before sign-in
@@ -325,12 +324,24 @@ def make_handler(token: str, port: int, agent: agent_client.AgentClient,
                 self._json(HTTPStatus.OK, {"ok": True}, cookie="vhsession=; Max-Age=0; Path=/")
                 return
 
-            if path == "/api/wizard/hetzner-token":
+            if path == "/api/wizard/connect":
+                # Credentials go to the provider to be checked, then to the
+                # credentials file. Never into a reply or a log.
+                host = str(body.get("host", ""))
+                prov = provider(host) if host in cli.HOST_CHOICES else None
+                if not prov or not prov.guide:
+                    self._json(HTTPStatus.BAD_REQUEST, {"error": "That host has no account to connect."})
+                    return
+                fields = {f["key"]: str(body.get(f["key"], "")) for f in prov.guide["fields"]}
                 try:
-                    save_token(str(body.get("token", "")).strip())
-                    self._json(HTTPStatus.OK, {"ok": True})
-                except (SystemExit, OSError):
-                    self._json(HTTPStatus.BAD_REQUEST, {"error": "Hetzner did not accept that token."})
+                    self._json(HTTPStatus.OK, {"connected": prov.connect(fields)})
+                except (SystemExit, OSError) as exc:
+                    reason = exc.code if isinstance(exc, SystemExit) else "Could not reach the provider."
+                    self._json(HTTPStatus.BAD_REQUEST, {"error": str(reason)})
+                return
+
+            if path == "/api/wizard/ssh-key":
+                self._json(HTTPStatus.OK, make_key())
                 return
 
             if path == "/api/wizard/check-ssh":
