@@ -21,7 +21,7 @@ h1 { color:var(--gold); font-size:42px; letter-spacing:.04em; font-weight:600; m
 .others { font-size:15px; margin:6px 0 0; color:var(--muted); }
 a { color:var(--gold); }
 h2 { color:var(--gold); font-size:22px; font-weight:600; margin:36px 0 10px; }
-ol { padding-left:22px; } li { margin-bottom:8px; }
+ol { padding-left:22px; } li { margin-bottom:8px; } li ul { padding-left:20px; margin:8px 0 0; }
 .note { border-left:3px solid var(--red); background:var(--panel); padding:14px 18px; margin:24px 0; }
 .note strong { color:var(--text); }
 footer { color:var(--muted); font-size:14px; text-align:center; padding:0 24px 32px; }
@@ -37,7 +37,7 @@ footer { color:var(--muted); font-size:14px; text-align:center; padding:0 24px 3
     <p class="free">Free. No account needed to download.</p>
     <p class="others">
       <a href="https://github.com/drogerschariot/valheim-deploy/releases/latest/download/valheim-deploy-windows.exe">Windows</a> ·
-      <a href="https://github.com/drogerschariot/valheim-deploy/releases/latest/download/valheim-deploy-macos-arm64">Mac (Apple Silicon)</a> ·
+      <a href="https://github.com/drogerschariot/valheim-deploy/releases/latest/download/valheim-deploy-macos-arm64.zip">Mac (Apple Silicon)</a> ·
       <a href="https://github.com/drogerschariot/valheim-deploy/releases/latest/download/valheim-deploy-linux">Linux</a>
     </p>
   </div>
@@ -53,7 +53,12 @@ footer { color:var(--muted); font-size:14px; text-align:center; padding:0 24px 3
   <h2>How it works</h2>
   <ol>
     <li>Download the app and open it. There is nothing to install.</li>
-    <li>On Windows, if you see “Windows protected your PC”, choose <strong>More info</strong>, then <strong>Run anyway</strong>. The app is not code-signed yet.</li>
+    <li>The app is not code-signed yet, so the first time you open it your computer warns you:
+      <ul>
+        <li><strong>Windows:</strong> on “Windows protected your PC”, choose <strong>More info</strong>, then <strong>Run anyway</strong>.</li>
+        <li><strong>Mac:</strong> open the downloaded zip, then double-click <strong>valheim-deploy-macos-arm64</strong>. When macOS says it was “Not Opened”, choose <strong>Done</strong>. Open <strong>System Settings &gt; Privacy &amp; Security</strong>, scroll down, choose <strong>Open Anyway</strong>, and confirm. After that it opens normally.</li>
+      </ul>
+    </li>
     <li>Your browser opens. Choose where to host: Hetzner Cloud, AWS, a Linux server you already have, or your own computer.</li>
     <li>Follow the steps, then share the join address and password with your friends.</li>
   </ol>
@@ -74,7 +79,7 @@ footer { color:var(--muted); font-size:14px; text-align:center; padding:0 24px 3
 const base = "https://github.com/drogerschariot/valheim-deploy/releases/latest/download/";
 const ua = navigator.userAgent;
 const pick = /Windows/.test(ua) ? ["valheim-deploy-windows.exe", "Windows"]
-           : /Macintosh/.test(ua) ? ["valheim-deploy-macos-arm64", "Mac (Apple Silicon)"]
+           : /Macintosh/.test(ua) ? ["valheim-deploy-macos-arm64.zip", "Mac (Apple Silicon)"]
            : /Android|iPhone|iPad/.test(ua) ? null
            : /Linux/.test(ua) ? ["valheim-deploy-linux", "Linux"] : null;
 if (pick) {
