@@ -3,11 +3,12 @@
 Create your own Valheim dedicated servers, as many as you like, and run them all
 from one dashboard in your browser.
 
+**[Download Valheim Deploy](https://drogerschariot.github.io/valheim-deploy/)**
+
 ## Get started
 
-1. Download the app for your computer from the
-   [latest release](https://github.com/drogerschariot/valheim-deploy/releases/latest).
-   There is nothing else to install and no repository to clone.
+1. Go to the [download page](https://drogerschariot.github.io/valheim-deploy/) and
+   press the download button. There is nothing else to install and no repository to clone.
 2. Open it, and the setup page opens in your browser.
 3. Follow the steps. When it finishes, the Connect tab has your join address and password.
 
