@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Valheim Server</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+
+<header class="rune">
+  <h1 id="server-name">Valheim</h1>
+  <select id="server-select" aria-label="Choose a server"></select>
+  <button id="new-server">+ New server</button>
+  <span class="world" id="world-name"></span>
+  <span class="spacer"></span>
+  <span class="pill" id="status-pill"><span class="dot"></span><span id="status-text">checking…</span></span>
+  <button id="signout">Sign out</button>
+</header>
+
+<main>
+  <div class="note bad" id="offline" hidden></div>
+  <section id="wizard" hidden>
+    <ol class="steps" id="wizard-steps"></ol>
+    <div id="wizard-body"></div>
+    <p class="error-line" id="wizard-error"></p>
+    <div class="row" id="wizard-nav">
+      <button id="wizard-back">Back</button>
+      <button id="wizard-next">Continue</button>
+      <button id="wizard-cancel">Cancel</button>
+    </div>
+  </section>
+
+  <section id="job" hidden>
+    <h2 id="job-title"></h2>
+    <p class="muted" id="job-status"></p>
+    <pre class="log" id="job-log"></pre>
+    <div class="row" style="margin-top:14px"><button id="job-close" hidden>Done</button></div>
+  </section>
+
+  <section id="confirm-delete" class="note bad" hidden>
+    <p><strong id="delete-title"></strong> This permanently deletes the server and its world.</p>
+    <label class="check"><input type="checkbox" id="delete-download" checked> Download its backups to this computer first</label>
+    <div class="row" style="margin-top:10px">
+      <input type="text" id="delete-name" placeholder="Type the server's short name">
+      <button id="delete-go" class="danger">Delete server</button>
+      <button id="delete-cancel">Cancel</button>
+    </div>
+  </section>
+
+  <div id="content">
+  <section class="tiles">
+    <div class="tile">
+      <div class="label">Players</div>
+      <div class="value" id="t-players">—</div>
+      <div class="sub" id="t-players-sub">query port</div>
+    </div>
+    <div class="tile">
+      <div class="label">Uptime</div>
+      <div class="value" id="t-uptime">—</div>
+      <div class="sub" id="t-restarts"></div>
+    </div>
+    <div class="tile">
+      <div class="label">Last world save</div>
+      <div class="value" id="t-save">—</div>
+      <div class="sub" id="t-save-sub"></div>
+    </div>
+    <div class="tile">
+      <div class="label">World size</div>
+      <div class="value" id="t-world">—</div>
+      <div class="sub" id="t-zdos"></div>
+    </div>
+    <div class="tile">
+      <div class="label">Memory (game process)</div>
+      <div class="value" id="t-mem">—</div>
+      <div class="sub" id="t-disk"></div>
+    </div>
+  </section>
+
+  <div class="section-label">Host</div>
+  <section class="tiles">
+    <div class="tile">
+      <div class="label">CPU</div>
+      <div class="value" id="t-cpu">—</div>
+      <div class="sub" id="t-cpu-sub"></div>
+    </div>
+    <div class="tile">
+      <div class="label">RAM</div>
+      <div class="value" id="t-ram">—</div>
+      <div class="sub" id="t-ram-sub"></div>
+    </div>
+    <div class="tile">
+      <div class="label">Disk</div>
+      <div class="value" id="t-hostdisk">—</div>
+      <div class="sub" id="t-hostdisk-sub"></div>
+    </div>
+    <div class="tile">
+      <div class="label">Disk I/O</div>
+      <div class="value" id="t-diskio">—</div>
+      <div class="sub" id="t-diskio-sub">read / write</div>
+    </div>
+  </section>
+
+  <section class="actions">
+    <button data-action="start">Start</button>
+    <button data-action="restart" class="danger">Restart</button>
+    <button data-action="stop" class="danger">Stop</button>
+    <button data-action="backup">Back up now</button>
+    <button data-action="update_check">Check for update</button>
+    <button data-job="update">Update game</button>
+    <button data-job="download-backups">Download backups</button>
+    <button data-job="allow-my-ip" id="fix-ip">Fix my IP</button>
+    <button data-job="apply" id="retry-install">Retry install</button>
+    <button id="delete-server" class="danger">Delete server</button>
+  </section>
+
+  <nav class="tabs">
+    <div class="tab active" data-tab="connect">Connect</div>
+    <div class="tab" data-tab="overview">Overview</div>
+    <div class="tab" data-tab="players">Players</div>
+    <div class="tab" data-tab="access">Access</div>
+    <div class="tab" data-tab="backups">Backups</div>
+    <div class="tab" data-tab="logs">Logs</div>
+  </nav>
+
+  <section class="panel active" id="panel-connect">
+    <table><tbody id="connect-body"></tbody></table>
+    <div class="row" style="margin-top:16px">
+      <button id="reach-check">Check from the internet</button>
+      <span class="muted" id="reach-result"></span>
+    </div>
+    <div id="connect-notes"></div>
+    <p class="muted" id="connect-cost"></p>
+  </section>
+
+  <section class="panel" id="panel-overview">
+    <div class="note">
+      These are the flags the <em>running</em> process actually has, read from
+      <span class="mono">/proc</span> — not what was last deployed.
+      The two differ until a change has been applied.
+    </div>
+    <table>
+      <thead><tr><th>Setting</th><th>Value</th></tr></thead>
+      <tbody id="flags-body"></tbody>
+    </table>
+    <p class="muted" id="modifier-line" style="margin-top:16px"></p>
+  </section>
+
+  <section class="panel" id="panel-players">
+    <div class="note">
+      Valheim logs a join but nothing dependable on leave, so this is who was
+      <em>recently seen</em>, newest first — not a live roster. The player count
+      in the tile above comes from the server's own query port and is the
+      authoritative number.
+    </div>
+    <table>
+      <thead><tr><th>Character</th><th>Last seen</th></tr></thead>
+      <tbody id="players-body"></tbody>
+    </table>
+  </section>
+
+  <section class="panel" id="panel-access">
+    <div class="note">
+      The server re-reads these files at runtime, so changes take effect without
+      a restart. Banning someone already connected takes effect when they next
+      try to join — Valheim has no remote kick.
+    </div>
+    <div class="row">
+      <select id="list-name" style="padding:9px">
+        <option value="admins">Admins</option>
+        <option value="banned">Banned</option>
+        <option value="permitted">Permitted</option>
+      </select>
+      <input type="text" id="list-entry" placeholder="Steam_76561198000000000">
+      <button id="list-add">Add</button>
+    </div>
+    <table>
+      <thead><tr><th>Entry</th><th class="num">Action</th></tr></thead>
+      <tbody id="list-body"></tbody>
+    </table>
+  </section>
+
+  <section class="panel" id="panel-backups">
+    <div class="note">
+      Daily archives written outside the server's own directory tree. Valheim
+      keeps its own rotating copies inside <span class="mono">worlds_local</span>
+      as the shorter-horizon safety net. Copy them to this computer with
+      the <em>Download backups</em> button above.
+    </div>
+    <table>
+      <thead><tr><th>Archive</th><th class="num">Size</th><th>Taken</th></tr></thead>
+      <tbody id="backups-body"></tbody>
+    </table>
+  </section>
+
+  <section class="panel" id="panel-logs">
+    <div class="row">
+      <button id="logs-refresh">Refresh now</button>
+      <span class="pill up"><span class="dot"></span>live -- polls every 3s while open</span>
+      <span class="muted">The server's own output. Newest at the bottom.</span>
+    </div>
+    <pre class="log" id="logs"></pre>
+  </section>
+  </div>
+</main>
+
+<footer>
+  Snapshot <span id="generated" class="mono">—</span> · runs on this computer; servers are reached over SSH
+</footer>
+
+<script src="/static/app.js"></script>
+<script src="/static/wizard.js"></script>
+</body>
+</html>
