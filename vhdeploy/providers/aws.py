@@ -32,7 +32,8 @@ INSTANCE_TYPES = {
 
 def aws(rec: dict[str, Any], *args: str) -> Any:
     region = rec["resources"]["region"]
-    result = subprocess.run(["aws", "--region", region, "--output", "json", *args],
+    # Resolved first: Windows will not launch a pip-installed aws.cmd by bare name.
+    result = subprocess.run([shutil.which("aws") or "aws", "--region", region, "--output", "json", *args],
                             capture_output=True, text=True, check=False)
     if result.returncode != 0:
         raise SystemExit(f"AWS refused `{' '.join(args[:2])}`: {result.stderr.strip()}")

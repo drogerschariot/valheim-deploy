@@ -175,6 +175,7 @@ class Parsers(unittest.TestCase):
         self.assertEqual(out["join_code"], "998877")
 
 
+@unittest.skipIf(os.name == "nt", "the agent runs on Linux game hosts, never on Windows")
 class AgentSupervised(unittest.TestCase):
     """The real agent, supervising a fake game, driven through the real client."""
 
@@ -326,7 +327,14 @@ class AWS(unittest.TestCase):
     def setUp(self):
         self.bin = Path(tempfile.mkdtemp())
         self.log = self.bin / "calls.log"
-        shim = self.bin / "aws"
+        shim = self.bin / "aws.py"
+        launcher_name = "aws.cmd" if os.name == "nt" else "aws"
+        launcher_file = self.bin / launcher_name
+        if os.name == "nt":
+            launcher_file.write_text(f'@"{sys.executable}" "{shim}" %*\r\n')
+        else:
+            launcher_file.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{shim}" "$@"\n')
+            launcher_file.chmod(0o755)
         shim.write_text(f'''#!{sys.executable}
 import json, sys
 a = sys.argv[1:]
@@ -338,8 +346,7 @@ out = {{"describe-vpcs": {{"Vpcs": [{{"VpcId": "vpc-1"}}]}}, "create-security-gr
        "describe-security-groups": {{"SecurityGroups": [{{"IpPermissions": [{{"FromPort": 22, "IpRanges": [{{"CidrIp": "1.1.1.1/32"}}]}}]}}]}}}}
 print(json.dumps(out.get(v[1], {{}})))
 ''')
-        shim.chmod(0o755)
-        self.path = mock.patch.dict(os.environ, {"PATH": f"{self.bin}:{os.environ['PATH']}"})
+        self.path = mock.patch.dict(os.environ, {"PATH": f"{self.bin}{os.pathsep}{os.environ['PATH']}"})
         self.path.start()
 
     def tearDown(self):
