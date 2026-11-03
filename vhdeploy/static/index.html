@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Valheim Server</title>
+<title>Valheim Deploy</title>
 <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
@@ -16,6 +16,7 @@
   <span class="spacer"></span>
   <span class="pill" id="status-pill"><span class="dot"></span><span id="status-text">checking…</span></span>
   <button id="signout">Sign out</button>
+  <button id="quit-app" class="danger" hidden title="Stops every server, saving each world, and closes the app">Quit app</button>
 </header>
 
 <main>
@@ -106,9 +107,11 @@
     <button data-action="restart" class="danger">Restart</button>
     <button data-action="stop" class="danger">Stop</button>
     <button data-action="backup">Back up now</button>
-    <button data-action="update_check">Check for update</button>
+    <button data-action="update_check" id="update-check">Check for update</button>
     <button data-job="update">Update game</button>
-    <button data-job="download-backups">Download backups</button>
+    <button data-job="download-backups" id="download-backups">Download backups</button>
+    <button id="open-folder" hidden>Open backups folder</button>
+    <label class="check inline" id="autostart-wrap" hidden><input type="checkbox" id="autostart"> Start when the app opens</label>
     <button data-job="allow-my-ip" id="fix-ip">Fix my IP</button>
     <button data-job="apply" id="retry-install">Retry install</button>
     <button id="delete-server" class="danger">Delete server</button>
@@ -116,6 +119,7 @@
 
   <nav class="tabs">
     <div class="tab active" data-tab="connect">Connect</div>
+    <div class="tab" data-tab="network" id="network-tab" hidden>Network</div>
     <div class="tab" data-tab="overview">Overview</div>
     <div class="tab" data-tab="players">Players</div>
     <div class="tab" data-tab="access">Access</div>
@@ -131,6 +135,38 @@
     </div>
     <div id="connect-notes"></div>
     <p class="muted" id="connect-cost"></p>
+  </section>
+
+  <section class="panel" id="panel-network">
+    <p>Friends outside your home reach this server through your router. Work down this list: each
+       item says what's wrong and, where it can, fixes it for you.</p>
+    <div id="net-body"><p class="muted">Checking your network…</p></div>
+    <div class="row" style="margin-top:16px">
+      <button id="net-refresh">Check again</button>
+      <span class="muted" id="net-checked"></span>
+    </div>
+    <details class="explain">
+      <summary>What do these words mean?</summary>
+      <dl>
+        <dt>Public IP address</dt>
+        <dd>The one address the internet sees for your whole home. Friends join with it. Your internet
+            provider can change it, often when the router restarts.</dd>
+        <dt>LAN IP address</dt>
+        <dd>This PC's address inside your home, such as 192.168.1.50. Only devices on your own network can
+            use it. Your router hands these out and can change them, which is why a reservation helps.</dd>
+        <dt>Port forwarding</dt>
+        <dd>A rule in your router that says "game traffic arriving on these ports goes to this PC". Without
+            it the router doesn't know where the traffic belongs, and drops it.</dd>
+        <dt>UPnP</dt>
+        <dd>A way for apps to ask the router for a port forward themselves. Many routers have it; some
+            ship with it off.</dd>
+        <dt>CGNAT</dt>
+        <dd>When your internet provider shares one public IP between many customers. Nothing you set at
+            home can then let friends in. Ask the provider for your own public IPv4 address.</dd>
+        <dt>Firewall</dt>
+        <dd>Windows' own filter for incoming traffic. It needs a rule allowing the game in.</dd>
+      </dl>
+    </details>
   </section>
 
   <section class="panel" id="panel-overview">
@@ -205,7 +241,7 @@
 </main>
 
 <footer>
-  Snapshot <span id="generated" class="mono">—</span> · runs on this computer; servers are reached over SSH
+  Snapshot <span id="generated" class="mono">—</span> · <span id="footer-where">runs on this computer; servers are reached over SSH</span>
 </footer>
 
 <script src="/static/app.js"></script>

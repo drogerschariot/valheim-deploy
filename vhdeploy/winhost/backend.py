@@ -84,6 +84,9 @@ class WindowsBackend:
         self.data_dir = self.root / "data"
         self.backup_dir = self.root / "backups"
         self.log_file = self.root / "server.log"
+        # The game outlives the app if the app is killed, so its PID is kept
+        # to find it again on the next start.
+        self.pid_file = self.root / "server.pid"
         self.lock = threading.RLock()
         self.proc: subprocess.Popen | None = None
         self.argv: list[str] = []
@@ -151,6 +154,7 @@ class WindowsBackend:
             if not self.installed():
                 self.phase = "not installed"
                 return
+            self._stop_leftover()
             self.ready = False
             command = server_binary()
             game_args = launcher.build_argv(self.cfg, self.password, command[-1])[1:]
@@ -167,6 +171,7 @@ class WindowsBackend:
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=flags)
             self.started_at = time.time()
             self.phase = "starting"
+            self.pid_file.write_text(str(self.proc.pid))
             self._emit(f"Started {self.name} (process {self.proc.pid}).")
         threading.Thread(target=self._tail, args=(self.proc,), daemon=True).start()
 
@@ -184,6 +189,7 @@ class WindowsBackend:
             self._emit(f"Could not ask it to save: {exc}")
         try:
             proc.wait(STOP_BUDGET if delivered else 5)
+            self.pid_file.unlink(missing_ok=True)
             self._emit("The server saved and stopped.")
         except subprocess.TimeoutExpired:
             # Being killed mid-write is worse than waiting, hence the budget.
@@ -191,6 +197,27 @@ class WindowsBackend:
                        "Progress since the last autosave may be lost.")
             proc.kill()
             proc.wait()
+
+    def _stop_leftover(self) -> None:
+        """A server left running by an app that was killed, rather than quit,
+        holds the game ports, so a new one could never start. Stop it the safe
+        way, so its world is saved, before doing anything else."""
+        try:
+            pid = int(self.pid_file.read_text().strip())
+        except (OSError, ValueError):
+            return
+        # Windows reports the executable; elsewhere the whole command line.
+        program = Path(server_binary()[0 if IS_WINDOWS else -1]).name
+        if ctrlc.alive(pid) and program.lower() in ctrlc.image(pid).lower():
+            self._emit(f"Found {self.name} still running from before (process {pid}). "
+                       "Stopping it so it saves...")
+            ctrlc.interrupt_pid(pid)
+            deadline = time.time() + STOP_BUDGET
+            while ctrlc.alive(pid) and time.time() < deadline:
+                time.sleep(1)
+            self._emit("It stopped." if not ctrlc.alive(pid) else
+                       f"It did not stop within {STOP_BUDGET}s; end valheim_server.exe in Task Manager.")
+        self.pid_file.unlink(missing_ok=True)
 
     def _watch(self) -> None:
         while not self._closing:

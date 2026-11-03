@@ -101,10 +101,10 @@ function renderStatus(s) {
     const vm = s.vm || {};
     $("t-cpu").textContent = vm.cpu_percent === null || vm.cpu_percent === undefined
         ? "—" : `${vm.cpu_percent}%`;
-    const load = vm.load_average || {};
-    $("t-cpu-sub").textContent = vm.cpu_cores
-        ? `${vm.cpu_cores} cores · load ${load["1m"] ?? "—"}/${load["5m"] ?? "—"}/${load["15m"] ?? "—"}`
-        : "";
+    const load = vm.load_average;
+    $("t-cpu-sub").textContent = !vm.cpu_cores ? ""
+        : load ? `${vm.cpu_cores} cores · load ${load["1m"] ?? "—"}/${load["5m"] ?? "—"}/${load["15m"] ?? "—"}`
+        : `${vm.cpu_cores} cores`;
 
     const mem = vm.memory || {};
     $("t-ram").textContent = mem.percent !== undefined && mem.percent !== null
@@ -394,6 +394,139 @@ async function checkReach() {
         : "No answer. Check the firewall and port forward. This can fail from inside your own network even when outside players connect fine.";
 }
 
+// -- network (servers on this PC) ------------------------------------------
+
+function netItem(state, title, ...body) {
+    const item = document.createElement("div");
+    item.className = `net-item ${state}`;
+    const mark = { ok: "✓", todo: "!", bad: "✕", unknown: "?" }[state];
+    const head = document.createElement("div");
+    head.className = "net-head";
+    head.innerHTML = `<span class="net-mark">${mark}</span>`;
+    const h = document.createElement("strong");
+    h.textContent = title;
+    head.appendChild(h);
+    item.appendChild(head);
+    body.forEach((b) => item.appendChild(typeof b === "string" ? Object.assign(document.createElement("p"), { textContent: b }) : b));
+    return item;
+}
+
+function netButton(label, action, note) {
+    const row = document.createElement("div");
+    row.className = "row";
+    const b = document.createElement("button");
+    b.textContent = label;
+    const result = document.createElement("span");
+    result.className = "muted";
+    if (note) result.textContent = note;
+    b.onclick = async () => {
+        b.disabled = true;
+        result.textContent = "Working…";
+        const { body } = await api(serverPath("network"), { method: "POST", body: JSON.stringify({ action }) });
+        b.disabled = false;
+        result.textContent = body.detail || body.error || "";
+        toast(body.detail || body.error, !body.ok);
+        if (body.ok) loadNetwork(true);
+    };
+    row.append(b, result);
+    return row;
+}
+
+function steps(lines) {
+    const ol = document.createElement("ol");
+    lines.forEach((l) => { const li = document.createElement("li"); li.innerHTML = l; ol.appendChild(li); });
+    return ol;
+}
+
+async function loadNetwork(refresh = false) {
+    if (!current) return;
+    const asked = current;
+    const box = $("net-body");
+    if (!box.children.length || refresh) box.innerHTML = `<p class="muted">Checking your network… this takes a few seconds.</p>`;
+    const { status, body: n } = await api(serverPath("network") + (refresh ? "?refresh=1" : ""));
+    if (asked !== current) return;
+    if (status !== 200) { box.innerHTML = `<p class="error-line">${escapeHtml(n.error || "Could not check.")}</p>`; return; }
+    box.innerHTML = "";
+    const ports = `UDP ${n.ports[0]}-${n.ports[1]}`;
+    const lan = escapeHtml(n.lan_ip || "this PC's address");
+
+    if (n.public_ip_changed) {
+        box.appendChild(netItem("todo", "Your public IP address changed",
+            `It was ${n.previous_public_ip} and is now ${n.public_ip}. Send friends the new join address below. ` +
+            "A dynamic DNS name, which many routers offer, gives them one that never changes."));
+    }
+
+    // 1. Windows Firewall
+    const fw = n.firewall;
+    if (!fw.supported) {
+        box.appendChild(netItem("unknown", "Windows Firewall", "Only checked on Windows."));
+    } else if (fw.rule) {
+        box.appendChild(netItem("ok", "Windows Firewall lets the game in",
+            `A rule allows ${ports} in for the Valheim server.`, netButton("Remove rule", "firewall-remove")));
+    } else {
+        box.appendChild(netItem("todo", "Windows Firewall may block players",
+            `Add a rule that lets ${ports} in for the Valheim server only. Windows asks for permission: choose Yes.`,
+            netButton("Add firewall rule", "firewall-add")));
+    }
+
+    // 2. Router port forwarding
+    const manual = steps([
+        n.router_page ? `Open your router's page: <a href="${escapeHtml(n.router_page)}" target="_blank" rel="noopener">${escapeHtml(n.router_page)}</a>, and sign in. The password is often on a sticker on the router.`
+                      : "Open your router's settings page and sign in. Its address is often on a sticker on the router.",
+        `Find the port forwarding section. It may be called Port Forwarding, Virtual Server, NAT, Applications or Gaming.`,
+        `Add a rule: protocol <strong>UDP</strong>, ports <strong>${n.ports[0]}-${n.ports[1]}</strong>, to <strong>${lan}</strong>.`,
+        `Also reserve ${lan} for this PC (often under DHCP or LAN settings), so the address, and the rule, keep working.`,
+    ]);
+    if (n.upnp.forwarded) {
+        box.appendChild(netItem("ok", "Your router forwards the game to this PC",
+            `${ports} goes to ${n.lan_ip}.`, netButton("Remove the forward", "close-ports")));
+    } else if (n.upnp.available) {
+        const parts = [`Your router can do this for you. It will send ${ports} to this PC (${n.lan_ip}).`];
+        if (n.upnp.elsewhere.length) parts.push(`Right now these ports go to another device (${n.upnp.elsewhere.join(", ")}), perhaps another server.`);
+        box.appendChild(netItem("todo", "Forward the game ports on your router", ...parts,
+            netButton("Open ports automatically", "open-ports")));
+    } else {
+        const details = document.createElement("details");
+        details.innerHTML = "<summary>How to do it by hand</summary>";
+        details.open = true;
+        details.appendChild(manual);
+        box.appendChild(netItem("todo", "Forward the game ports on your router",
+            "Your router didn't answer the automatic request (UPnP), so this needs doing in its settings. " +
+            "If you already did, this can stay unticked: the internet check below is the real test.", details));
+    }
+
+    // 3. Public IP and CGNAT
+    const pub = escapeHtml(n.public_ip || "unknown");
+    if (n.nat === "ok") {
+        box.appendChild(netItem("ok", "Your internet connection accepts incoming players",
+            `Your router holds your public IP address (${n.public_ip}), so port forwarding works.`));
+    } else if (n.nat === "cgnat") {
+        box.appendChild(netItem("bad", "Your internet provider uses CGNAT",
+            `Your router's internet address (${n.router_wan_ip}) isn't your public IP (${n.public_ip}). ` +
+            "Your provider shares one address between customers, so no setting at home can let friends in.",
+            steps(["Ask your provider for a public IPv4 address, or to take you off CGNAT. Many do this free or for a small fee.",
+                   "Until then, friends on your own network can still join with the LAN address below."])));
+    } else if (n.nat === "double") {
+        box.appendChild(netItem("bad", "There's a second router in front of yours",
+            `Your router's internet address (${n.router_wan_ip}) is a private one, so another device, often the provider's modem, sits in front. ` +
+            "Either forward the ports on that device too, to your router's address, or set it to bridge mode."));
+    } else {
+        box.appendChild(netItem("unknown", "Couldn't check for CGNAT",
+            `Your public IP is ${n.public_ip || "unknown"}. On your router's status page, find its internet (WAN) address. ` +
+            "If it differs from your public IP, or starts with 100.64 to 100.127, your provider uses CGNAT and port forwarding can't work."));
+    }
+
+    // 4. What to send friends
+    const share = document.createElement("table");
+    const tb = document.createElement("tbody");
+    addRow(tb, "Friends on the internet", n.join.internet || "unknown");
+    addRow(tb, "Players on your home network", n.join.lan || "unknown");
+    share.appendChild(tb);
+    box.appendChild(netItem("ok", "What to send friends", share,
+        "Plus the password from the Connect tab. In Valheim: Join Game, Add server, then the address."));
+    $("net-checked").textContent = `Checked ${new Date().toLocaleTimeString()}.`;
+}
+
 // -- servers --------------------------------------------------------------
 
 let SERVERS = [];
@@ -403,8 +536,19 @@ function selectServer(name) {
     current = name;
     localStorage.setItem("server", name);
     const info = serverInfo();
+    const pc = !!(info && info.this_pc);
     $("fix-ip").hidden = !(info && info.cloud);
     $("retry-install").hidden = !(info && info.can_retry);
+    $("network-tab").hidden = !pc;
+    $("autostart-wrap").hidden = !pc;
+    $("autostart").checked = !!(info && info.autostart);
+    $("open-folder").hidden = !pc;
+    $("download-backups").hidden = pc;
+    $("update-check").hidden = pc;
+    $("t-diskio").closest(".tile").hidden = pc;  // Windows gives no disk rate without admin
+    $("net-body").innerHTML = "";
+    if (!pc && $("panel-network").classList.contains("active")) document.querySelector('[data-tab="connect"]').click();
+    if (pc && $("panel-network").classList.contains("active")) loadNetwork();
     $("reach-result").textContent = "";
     $("world-name").textContent = "";
     $("offline").hidden = true;
@@ -418,12 +562,15 @@ async function loadServers() {
     const { body } = await api("/api/servers");
     const servers = body.servers || [];
     SERVERS = servers;
+    $("quit-app").hidden = !body.app_mode;
+    $("signout").hidden = !!body.app_mode;
+    if (body.app_mode) $("footer-where").textContent = "servers run on this PC · closing this window leaves them running";
     const select = $("server-select");
     select.innerHTML = "";
     servers.forEach((s) => {
         const option = document.createElement("option");
         option.value = s.name;
-        option.textContent = `${s.server_name} (${s.name}, ${s.provider})`;
+        option.textContent = body.app_mode ? `${s.server_name} (${s.name})` : `${s.server_name} (${s.name}, ${s.provider})`;
         select.appendChild(option);
     });
     $("content").hidden = servers.length === 0;
@@ -460,6 +607,7 @@ document.querySelectorAll(".tab").forEach((tab) => {
         }
         if (tab.dataset.tab === "backups") loadBackups();
         if (tab.dataset.tab === "connect") loadConnect();
+        if (tab.dataset.tab === "network") loadNetwork();
     };
 });
 
@@ -476,6 +624,23 @@ $("list-add").onclick = () => {
     mutateList($("list-name").value, entry, "add").then(() => ($("list-entry").value = ""));
 };
 $("logs-refresh").onclick = loadLogs;
+$("net-refresh").onclick = () => loadNetwork(true);
+$("autostart").onchange = async (e) => {
+    const { body } = await api(serverPath("autostart"), { method: "POST", body: JSON.stringify({ on: e.target.checked }) });
+    const info = serverInfo();
+    if (info) info.autostart = body.autostart;
+    toast(body.autostart ? "Starts when the app opens." : "Won't start until you press Start.");
+};
+$("open-folder").onclick = async () => {
+    const { body } = await api(serverPath("network"), { method: "POST", body: JSON.stringify({ action: "open-folder" }) });
+    if (!body.ok) toast(body.error, true);
+};
+$("quit-app").onclick = async () => {
+    if (!window.confirm("Quit Valheim Deploy?\n\nEvery server stops, saving its world first. Players are disconnected.")) return;
+    await api("/api/app/quit", { method: "POST", body: "{}" });
+    document.body.innerHTML = '<main><h2 style="margin-top:60px">Stopping your servers and saving their worlds…</h2>' +
+        '<p class="muted">This can take up to two minutes. You can close this window.</p></main>';
+};
 $("signout").onclick = async () => {
     await api("/api/logout", { method: "POST", body: "{}" });
     window.location.reload();

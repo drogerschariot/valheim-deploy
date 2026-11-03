@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hmac
 import json
+import os
 import re
 import secrets
 import threading
@@ -148,8 +149,16 @@ def local_pc_action(rec: dict[str, Any], what: str, body: dict[str, Any]) -> tup
         rec["settings"]["autostart"] = bool(body.get("on"))
         registry.save(rec)
         return HTTPStatus.OK, {"ok": True, "autostart": rec["settings"]["autostart"]}
+    from . import winhost
     from .winhost import network
     action, port = str(body.get("action", "")), rec["settings"]["port"]
+    if action == "open-folder":
+        folder = winhost.instance_dir(rec["name"]) / "backups"
+        folder.mkdir(parents=True, exist_ok=True)
+        if not hasattr(os, "startfile"):
+            return HTTPStatus.CONFLICT, {"error": f"Backups are in {folder}"}
+        os.startfile(folder)  # noqa: S606  (Explorer, on the user's own PC)
+        return HTTPStatus.OK, {"ok": True}
     try:
         if action == "open-ports":
             return HTTPStatus.OK, {"ok": True, "detail": network.open_ports(rec)}
@@ -285,7 +294,7 @@ def make_handler(token: str, port: int, agent: agent_client.AgentClient,
                 return
 
             if path == "/api/servers":
-                self._json(HTTPStatus.OK, {"servers": [
+                self._json(HTTPStatus.OK, {"app_mode": QUIT is not None, "servers": [
                     {**summary(r), "job": getattr(jobs.running(r["name"]), "id", None)}
                     for r in registry.all_servers()]})
                 return

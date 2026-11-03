@@ -31,6 +31,9 @@ SEARCH_TARGETS = ["urn:schemas-upnp-org:device:InternetGatewayDevice:1",
                   "urn:schemas-upnp-org:service:WANIPConnection:1"]
 WAN_SERVICES = ("WANIPConnection", "WANPPPConnection")
 CGNAT = ipaddress.ip_network("100.64.0.0/10")
+# Home-network ranges. Not ipaddress's is_private, which also counts
+# documentation and other reserved ranges.
+LAN_RANGES = [ipaddress.ip_network(n) for n in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")]
 CREATE_NO_WINDOW = 0x08000000
 
 
@@ -99,7 +102,7 @@ def nat_type(router_wan: str | None, public: str | None) -> str:
         return "unknown"
     if wan in CGNAT:
         return "cgnat"
-    if wan.is_private:
+    if any(wan in net for net in LAN_RANGES):
         return "double"
     if public and router_wan != public:
         return "cgnat"

@@ -10,12 +10,21 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from pathlib import Path
 from typing import Any
 
 
+def default_home() -> Path:
+    # The installed Windows app keeps its data where Windows apps do. Worlds
+    # can be gigabytes, and this folder is not synced by OneDrive.
+    if sys.platform == "win32" and getattr(sys, "frozen", False) and os.environ.get("LOCALAPPDATA"):
+        return Path(os.environ["LOCALAPPDATA"]) / "ValheimDeploy"
+    return Path.home() / ".valheim-deploy"
+
+
 def home() -> Path:
-    path = Path(os.environ.get("VALHEIM_DEPLOY_HOME", Path.home() / ".valheim-deploy"))
+    path = Path(os.environ.get("VALHEIM_DEPLOY_HOME") or default_home())
     for sub in ("", "servers", "keys", "backups"):
         (path / sub).mkdir(parents=True, exist_ok=True, mode=0o700)
     return path

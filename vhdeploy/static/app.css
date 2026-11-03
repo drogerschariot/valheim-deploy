@@ -278,3 +278,23 @@ ol.guide a { white-space: nowrap; }
 }
 .error-line { color: #e2917c; min-height: 1.4em; font-size: 14px; }
 pre.log#job-log { max-height: 46vh; }
+
+/* Network checklist */
+.net-item { border-left: 3px solid var(--edge-bright); background: rgba(255,255,255,.02); padding: 12px 16px; margin-bottom: 12px; }
+.net-item.ok { border-left-color: #6f8f4e; }
+.net-item.todo { border-left-color: var(--gold); }
+.net-item.bad { border-left-color: var(--red); }
+.net-head { display: flex; gap: 10px; align-items: center; margin-bottom: 6px; }
+.net-mark { font-family: var(--mono); width: 20px; text-align: center; }
+.net-item.ok .net-mark { color: #9cc06f; }
+.net-item.todo .net-mark { color: var(--gold); }
+.net-item.bad .net-mark { color: #e2917c; }
+.net-item p { margin: 4px 0 8px; }
+.net-item ol { margin: 6px 0 8px; padding-left: 22px; }
+.net-item .row { margin: 8px 0 0; }
+.net-item table { margin: 4px 0 8px; }
+details summary { cursor: pointer; color: var(--gold); }
+details.explain { margin-top: 22px; }
+details.explain dt { font-weight: 600; margin-top: 10px; }
+details.explain dd { margin: 2px 0 0 0; color: var(--muted); }
+.check.inline { display: inline-flex; margin: 0 0 0 8px; align-self: center; }
