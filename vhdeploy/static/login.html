@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Valheim Server</title>
+<link rel="stylesheet" href="/static/login.css">
+</head>
+<body>
+  <form id="form" autocomplete="off">
+    <h1>Valheim</h1>
+    <p class="sub">Your servers</p>
+    <input type="password" id="token" placeholder="Dashboard token" autofocus>
+    <button type="submit">Enter</button>
+    <p class="error" id="error"></p>
+    <p class="foot">Runs on this computer only. Start it with <code>./valheim dashboard</code>, which signs you in.</p>
+  </form>
+
+<script>
+const form = document.getElementById("form");
+form.onsubmit = async (e) => {
+    e.preventDefault();
+    const error = document.getElementById("error");
+    error.textContent = "";
+    const res = await fetch("/api/login", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: document.getElementById("token").value }),
+    });
+    if (res.ok) {
+        window.location.href = "/";
+    } else {
+        error.textContent = "That token was not accepted.";
+        document.getElementById("token").value = "";
+    }
+};
+</script>
+</body>
+</html>

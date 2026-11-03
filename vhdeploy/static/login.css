@@ -1,0 +1,87 @@
+/* Sign-in page. Deliberately the only stylesheet served before a session
+   exists, which is why it carries no layout the dashboard depends on. */
+
+:root {
+    --gold: #c8a45c;
+    --parchment: #e6dcc6;
+    --muted: #9a9080;
+    --edge: #56462f;
+    --serif: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+* { box-sizing: border-box; }
+
+body {
+    margin: 0;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background:
+        radial-gradient(ellipse at 50% 0%, #2a2118 0%, transparent 65%),
+        #14110e;
+    color: var(--parchment);
+    font-family: var(--serif);
+}
+
+form {
+    width: min(92vw, 380px);
+    background: #1d1914;
+    border: 1px solid #3a3026;
+    border-top: 3px solid var(--edge);
+    padding: 36px 32px 28px;
+    text-align: center;
+    box-shadow: 0 6px 30px rgba(0, 0, 0, .6);
+}
+
+h1 {
+    margin: 0;
+    font-size: 34px;
+    letter-spacing: .18em;
+    color: var(--gold);
+    font-weight: 600;
+    text-transform: uppercase;
+}
+
+.sub {
+    margin: 6px 0 26px;
+    color: var(--muted);
+    font-size: 13px;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    font-family: var(--mono);
+}
+
+input {
+    width: 100%;
+    font-family: var(--mono);
+    font-size: 15px;
+    background: #100e0b;
+    border: 1px solid var(--edge);
+    color: var(--parchment);
+    padding: 11px 14px;
+    text-align: center;
+    letter-spacing: .1em;
+}
+
+input:focus { outline: none; border-color: var(--gold); }
+
+button {
+    width: 100%;
+    margin-top: 14px;
+    font-family: var(--serif);
+    font-size: 16px;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--parchment);
+    background: linear-gradient(180deg, #2f2213, #241a0f);
+    border: 1px solid var(--edge);
+    padding: 11px;
+    cursor: pointer;
+}
+
+button:hover { border-color: var(--gold); color: var(--gold); }
+
+.error { color: #d08b78; font-size: 14px; min-height: 20px; margin: 14px 0 0; }
+.foot { color: var(--muted); font-size: 12px; margin: 18px 0 0; }
