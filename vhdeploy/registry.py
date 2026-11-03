@@ -56,8 +56,12 @@ def credential(key: str) -> str | None:
     return json.loads(path.read_text()).get(key) if path.exists() else None
 
 
-def store_credential(key: str, value: str) -> None:
+def store_credential(key: str, value: Any) -> None:
+    """Save one credential. None removes it."""
     path = home() / "credentials.json"
     data = json.loads(path.read_text()) if path.exists() else {}
-    data[key] = value
+    if value is None:
+        data.pop(key, None)
+    else:
+        data[key] = value
     write_private(path, json.dumps(data, indent=2))

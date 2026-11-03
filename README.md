@@ -43,8 +43,8 @@ See [Getting started](docs/getting-started.md) for what to have ready for each h
 | Option | Best for | You need | Cost | Network setup |
 |---|---|---|---|---|
 | **Hetzner Cloud** (recommended) | An always-on server for friends, at the lowest cost | An account and API token | Live prices are shown in the wizard | Done for you |
-| **AWS** | You already use AWS | `aws` CLI, logged in | Highest: see below | Done for you |
-| **A Linux server you have** | A home server, Proxmox VM, or a VPS from any provider | x86-64 Ubuntu 20.04+, SSH as root or passwordless sudo | Whatever you pay now | You do it |
+| **AWS** | You already use AWS | An account and an IAM access key | Highest: see below | Done for you |
+| **A Linux server you have or rent** | A home server, Proxmox VM, or a VPS from any provider | x86-64 Ubuntu 20.04+, SSH as root or passwordless sudo | Whatever you pay now | You do it |
 | **This computer** (Docker) | Trying it out, a LAN party | Docker | Electricity | You do it |
 
 **Why Hetzner:** a game server runs flat out around the clock, which is the case

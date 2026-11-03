@@ -4,7 +4,11 @@
 
 const STEPS = ["Before you start", "Where", "Host details", "Your server", "Review"];
 const answers = {};
-let wizardStep = 0, options = null, hostOptions = null, hetznerAuthed = false;
+let wizardStep = 0, options = null, hostOptions = null;
+// Where each host's account walk-through is: "ask", "signup" or "credentials".
+// Kept apart from answers, so credentials are never part of the create request.
+const guideAt = {};
+let reconnect = false, madeKey = null;
 
 const el = (tag, props = {}, ...kids) => {
     const node = Object.assign(document.createElement(tag), props);
@@ -48,7 +52,10 @@ function showOnly(id) {
 
 async function openWizard() {
     Object.keys(answers).forEach((k) => delete answers[k]);
+    Object.keys(guideAt).forEach((k) => delete guideAt[k]);
     wizardStep = 0;
+    reconnect = false;
+    madeKey = null;
     showOnly("wizard");
     $("wizard-cancel").hidden = SERVERS.length === 0;
     $("wizard-body").textContent = "Checking this computer…";
@@ -83,7 +90,7 @@ function stepHost(body) {
         h.warnings.forEach((w) => card.append(el("small", { textContent: w })));
         if (h.needs_network_setup) card.append(el("small", { textContent: "You set up port forwarding and firewall rules yourself." }));
         card.disabled = !!h.problem;
-        card.onclick = () => { answers.host = h.key; hostOptions = null; drawStep(); };
+        card.onclick = () => { answers.host = h.key; hostOptions = null; reconnect = false; drawStep(); };
         body.append(card);
     });
 }
@@ -99,29 +106,78 @@ function stepDetails(body) {
     const players = text("players", "4", "number");
     players.onchange = () => { hostOptions = null; drawStep(); };
     body.append(field("How many players at once?", players, "Sets the size of machine we recommend."));
-    if (answers.host === "existing") return detailsExisting(body);
     if (answers.host === "local") return detailsLocal(body);
     if (!hostOptions) {
         body.append(el("p", { className: "muted", textContent: "Loading choices…" }));
         loadHostOptions().then(drawStep).catch((e) => { $("wizard-error").textContent = e.message; });
         return;
     }
+    if (answers.host === "existing") return detailsExisting(body);
+    if (hostOptions.needs_connect || reconnect) return connectAccount(body);
+    body.append(el("div", { className: "row" },
+        el("span", { className: "muted", textContent: `Connected to ${hostOptions.connected}.` }),
+        el("button", { textContent: "Use a different account", onclick: () => {
+            reconnect = true; guideAt[answers.host] = "credentials"; drawStep(); } })));
     if (answers.host === "hetzner") detailsHetzner(body);
     if (answers.host === "aws") detailsAws(body);
 }
 
-function detailsHetzner(body) {
-    if (hostOptions.needs_token) {
-        const token = el("input", { type: "password", autocomplete: "off" });
-        const save = el("button", { textContent: "Save token" });
-        save.onclick = async () => {
-            const res = await api("/api/wizard/hetzner-token", { method: "POST", body: JSON.stringify({ token: token.value }) });
-            if (res.status === 200) { hostOptions = null; drawStep(); }
-            else $("wizard-error").textContent = res.body.error;
-        };
-        body.append(field("Hetzner API token", token, `Create one at ${hostOptions.token_help}.`), save);
+// Numbered steps, each with an optional link that opens in a new tab.
+function steps(list) {
+    const ol = el("ol", { className: "guide" });
+    list.forEach((step) => {
+        const li = el("li", { textContent: step.text });
+        if (step.link) li.append(" ", el("a", { href: step.link, target: "_blank", rel: "noopener noreferrer", textContent: "Open ↗" }));
+        ol.append(li);
+    });
+    return ol;
+}
+
+function button(label, onclick) { return el("button", { textContent: label, onclick }); }
+
+// Asks whether the user has an account, walks them through making one if
+// not, then through getting the key or token this app needs.
+function connectAccount(body) {
+    const g = hostOptions.guide, host = answers.host;
+    const go = (where) => { guideAt[host] = where; drawStep(); };
+    const at = guideAt[host] || "ask";
+    if (at === "ask") {
+        body.append(el("p", { textContent: `To create servers for you, this app needs access to your ${g.service} account.` }),
+                    el("h3", { textContent: `Do you already have an account with ${g.service}?` }),
+                    el("div", { className: "row" },
+                       button("Yes, I have an account", () => go("credentials")),
+                       button("No, walk me through making one", () => go("signup"))));
         return;
     }
+    if (at === "signup") {
+        body.append(el("h3", { textContent: `Create your ${g.service} account` }), steps(g.signup),
+                    el("div", { className: "row" }, button("My account is ready", () => go("credentials"))));
+        return;
+    }
+    body.append(el("h3", { textContent: `Connect this app to ${g.service}` }), steps(g.credentials));
+    const values = {};
+    g.fields.forEach((f) => {
+        const input = el("input", { type: f.secret ? "password" : "text", autocomplete: "off", spellcheck: false,
+                                    oninput: (e) => { values[f.key] = e.target.value.trim(); } });
+        body.append(field(f.label, input));
+    });
+    const result = el("span", { className: "muted" });
+    const connect = button("Connect", async () => {
+        connect.disabled = true;
+        result.textContent = `Checking with ${g.service}…`;
+        const res = await api("/api/wizard/connect", { method: "POST", body: JSON.stringify({ host, ...values }) });
+        connect.disabled = false;
+        if (res.status !== 200) { result.textContent = ""; $("wizard-error").textContent = res.body.error; return; }
+        reconnect = false;
+        hostOptions = null;
+        drawStep();
+    });
+    body.append(el("p", { className: "muted", textContent: g.stored }),
+                el("div", { className: "row" }, connect, result,
+                   button("I don't have an account yet", () => go("signup"))));
+}
+
+function detailsHetzner(body) {
     const where = pick("hcloud_location", hostOptions.locations);
     where.value = hostOptions.location;
     answers.hcloud_location = hostOptions.location;
@@ -141,10 +197,9 @@ function detailsHetzner(body) {
 
 function detailsAws(body) {
     answers.aws_region = answers.aws_region || hostOptions.default_region;
-    body.append(field("AWS region (closest to your players)", text("aws_region")),
+    body.append(field("AWS region (closest to your players)", pick("aws_region", hostOptions.regions)),
                 field(`Instance (${hostOptions.recommended_gb} GB recommended)`, pick("aws_instance_type", hostOptions.instance_types),
-                      "Rough us-east-1 on-demand prices. Billed until the server is deleted."),
-                el("p", { className: "muted", textContent: "Uses the AWS account your aws command is logged in to." }));
+                      "Rough us-east-1 on-demand prices. Billed until the server is deleted."));
 }
 
 function detailsLocal(body) {
@@ -153,7 +208,34 @@ function detailsLocal(body) {
     if (notes.length > 1) body.append(tick("arm_ok", "Continue anyway"));
 }
 
+function rentAServer(body) {
+    body.append(el("h3", { textContent: "Rent a server" }), steps(hostOptions.vps_steps));
+    if (!madeKey) {
+        body.append(el("div", { className: "row" }, button("Make a key", async () => {
+            const res = await api("/api/wizard/ssh-key", { method: "POST", body: "{}" });
+            if (res.status !== 200) { $("wizard-error").textContent = res.body.error || "Could not make a key."; return; }
+            madeKey = res.body;
+            answers.ssh_key = madeKey.path;
+            drawStep();
+        })));
+    } else {
+        const key = el("textarea", { className: "key", readOnly: true, rows: 3, value: madeKey.public_key });
+        body.append(field("Public key: paste this into the provider", key, `The private half stays here: ${madeKey.path}`),
+                    el("div", { className: "row" }, button("Copy", () => navigator.clipboard.writeText(madeKey.public_key).then(() => toast("Copied")))));
+    }
+    body.append(el("div", { className: "row" }, button("My server is running", () => { guideAt.existing = "details"; drawStep(); })));
+}
+
 function detailsExisting(body) {
+    const at = guideAt.existing || "ask";
+    if (at === "ask") {
+        body.append(el("h3", { textContent: "Do you already have a Linux server for this?" }),
+                    el("div", { className: "row" },
+                       button("Yes, I have one", () => { guideAt.existing = "details"; drawStep(); }),
+                       button("No, help me rent one", () => { guideAt.existing = "rent"; drawStep(); })));
+        return;
+    }
+    if (at === "rent") return rentAServer(body);
     answers.ssh_user = answers.ssh_user || "root";
     answers.ssh_port = answers.ssh_port || "22";
     const result = el("span", { className: "muted" });
@@ -206,8 +288,11 @@ function stepProblem() {
     if (wizardStep === 0 && !answers.understood) return "Tick the box to continue.";
     if (wizardStep === 1 && !answers.host) return "Choose where the server should run.";
     if (wizardStep === 2) {
+        if (answers.host === "existing" && guideAt.existing !== "details") return "Answer the question above first.";
         if (answers.host === "existing" && !answers.ssh_host) return "Enter the SSH address.";
-        if (answers.host === "hetzner" && (!hostOptions || hostOptions.needs_token)) return "Save your Hetzner token first.";
+        if ((answers.host === "hetzner" || answers.host === "aws") && (!hostOptions || hostOptions.needs_connect || reconnect)) {
+            return `Connect your ${answers.host === "aws" ? "AWS" : "Hetzner"} account first.`;
+        }
         if (answers.host === "hetzner" && !answers.hcloud_plan) return "Choose a plan.";
         if (answers.host === "local" && options.hosts.find((h) => h.key === "local").warnings.length > 1 && !answers.arm_ok) return "Tick the box to continue.";
     }
