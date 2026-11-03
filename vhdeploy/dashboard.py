@@ -35,7 +35,9 @@ STATIC_DIR = paths.static_dir()
 # should take a code change.
 PUBLIC_ASSETS = {"login.css"}
 STATIC_ASSETS = {"app.js", "wizard.js", "app.css", "login.css"}
-SERVER_ROUTE = re.compile(r"^/api/servers/([a-z0-9-]+)/(status|logs|backups|connect|action|list|reach)$")
+SERVER_ROUTE = re.compile(r"^/api/servers/([a-z0-9-]+)/(status|logs|backups|connect|action|list|reach|network|autostart)$")
+# Set by the Windows app: what the tray's Quit does, so the page can offer it too.
+QUIT: Any = None
 JOB_ROUTE = re.compile(r"^/api/servers/([a-z0-9-]+)/(update|apply|download-backups|allow-my-ip|destroy)$")
 
 
@@ -51,6 +53,8 @@ def summary(rec: dict[str, Any]) -> dict[str, Any]:
             "provider_label": provider(rec["provider"]).label,
             "server_name": rec["settings"]["server_name"], "status": rec.get("status"),
             "cloud": rec["provider"] in ("aws", "hetzner"),
+            "this_pc": rec["provider"] == "windows",
+            "autostart": rec["settings"].get("autostart", True),
             # A cloud machine that was never created cannot be retried into
             # existence, only removed.
             "can_retry": rec.get("status") != "installed"
@@ -134,6 +138,35 @@ def connect_info(rec: dict[str, Any]) -> dict[str, Any]:
         "notes": prov.network_notes(rec),
         "cost": prov.describe_cost(rec),
     }
+
+
+def local_pc_action(rec: dict[str, Any], what: str, body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+    """Network fixes and the auto-start switch, for servers on this PC."""
+    if rec["provider"] != "windows":
+        return HTTPStatus.CONFLICT, {"error": "This only applies to servers on this PC."}
+    if what == "autostart":
+        rec["settings"]["autostart"] = bool(body.get("on"))
+        registry.save(rec)
+        return HTTPStatus.OK, {"ok": True, "autostart": rec["settings"]["autostart"]}
+    from .winhost import network
+    action, port = str(body.get("action", "")), rec["settings"]["port"]
+    try:
+        if action == "open-ports":
+            return HTTPStatus.OK, {"ok": True, "detail": network.open_ports(rec)}
+        if action == "close-ports":
+            network.close_ports(rec)
+            registry.save(rec)
+            return HTTPStatus.OK, {"ok": True, "detail": "The port forward was removed."}
+        if action in ("firewall-add", "firewall-remove"):
+            verb = action.split("-")[1]
+            if not network.elevate_firewall(verb, rec["name"], port):
+                return HTTPStatus.CONFLICT, {"error": "Windows did not get permission, so nothing changed. "
+                                                      "Choose Yes when Windows asks."}
+            done = "added" if verb == "add" else "removed"
+            return HTTPStatus.OK, {"ok": True, "detail": f"The firewall rule was {done}."}
+    except SystemExit as exc:
+        return HTTPStatus.CONFLICT, {"error": str(exc.code)}
+    return HTTPStatus.BAD_REQUEST, {"error": "unknown action"}
 
 
 class Refused(Exception):
@@ -289,6 +322,11 @@ def make_handler(token: str, port: int, agent: agent_client.AgentClient,
                 self._json(HTTPStatus.OK, connect_info(rec))
             elif what == "reach":
                 self._json(HTTPStatus.OK, host_a2s.query(rec.get("address") or "", rec["settings"]["port"] + 1))
+            elif what == "network":
+                from .winhost import network
+                info = network.status(rec, refresh="refresh" in route.query)
+                network.remember_public_ip(rec, info["public_ip"])
+                self._json(HTTPStatus.OK, info)
             elif what in ("status", "backups"):
                 self._proxy(rec, f"/api/{what}")
             elif what == "logs":
@@ -367,7 +405,17 @@ def make_handler(token: str, port: int, agent: agent_client.AgentClient,
                 self._json(HTTPStatus.ACCEPTED, {"job": job.id})
                 return
 
+            if path == "/api/app/quit" and QUIT:
+                self._json(HTTPStatus.OK, {"ok": True})
+                threading.Thread(target=QUIT, daemon=True).start()
+                return
+
             m = SERVER_ROUTE.match(path)
+            if m and m.group(2) in ("network", "autostart"):
+                rec = self._server(m.group(1))
+                if rec is not None:
+                    self._json(*local_pc_action(rec, m.group(2), body))
+                return
             if m and m.group(2) in ("action", "list"):
                 rec = self._server(m.group(1))
                 if rec is not None:

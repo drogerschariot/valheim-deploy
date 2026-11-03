@@ -137,8 +137,12 @@ class WindowsBackend:
 
     # -- control -----------------------------------------------------------
 
-    def installed(self) -> bool:
+    @staticmethod
+    def installed_game() -> bool:
         return bool(os.environ.get("VALHEIM_BINARY_ARGV")) or Path(server_binary()[0]).exists()
+
+    def installed(self) -> bool:
+        return self.installed_game()
 
     def _start(self) -> None:
         with self.lock:

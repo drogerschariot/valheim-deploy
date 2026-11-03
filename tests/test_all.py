@@ -284,7 +284,8 @@ class WindowsHost(unittest.TestCase):
         self.assertEqual((query["reachable"], query.get("name")), (True, "Hall"), query)
         self.assertNotIn("pw12345", json.dumps(snap["launch"]))
         self.assertEqual(snap["launch"]["flags"]["world"], "Midgard")
-        self.assertIn("Ragnar", json.dumps(snap["activity"]))
+        activity = self.manager.ensure(self.rec)[1].activity.get(force=True)
+        self.assertIn("Ragnar", json.dumps(activity))
 
         world = winhost.instance_dir("win1") / "data" / "worlds_local" / "Midgard"
         world.mkdir(parents=True)
