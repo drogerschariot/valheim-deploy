@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Valheim Deploy: your own Valheim server</title>
+<meta name="description" content="Create your own Valheim dedicated servers and run them from one dashboard. Free download for Windows, Mac and Linux.">
+<style>
+:root { --bg:#14110e; --panel:#1d1914; --edge:#3a3026; --edge2:#56462f; --gold:#c8a45c; --text:#e6dcc6; --muted:#9a9080; --red:#b4553f;
+        --serif:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif; }
+* { box-sizing:border-box; }
+body { margin:0; min-height:100vh; color:var(--text); font-family:var(--serif); font-size:17px; line-height:1.55;
+       background:radial-gradient(ellipse at 50% -10%,#2a2118 0%,transparent 60%),var(--bg); }
+main { max-width:720px; margin:0 auto; padding:64px 24px 40px; }
+h1 { color:var(--gold); font-size:42px; letter-spacing:.04em; font-weight:600; margin:0 0 8px; text-align:center; }
+.lead { text-align:center; font-size:20px; margin:0 0 36px; }
+.cta { text-align:center; margin-bottom:44px; }
+.button { display:inline-block; padding:16px 36px; font-size:20px; color:#14110e; background:var(--gold); text-decoration:none; font-weight:600; border-radius:3px; }
+.button:hover, .button:focus { background:#dcbb74; }
+.free { color:var(--muted); font-size:15px; margin:12px 0 0; }
+.others { font-size:15px; margin:6px 0 0; color:var(--muted); }
+a { color:var(--gold); }
+h2 { color:var(--gold); font-size:22px; font-weight:600; margin:36px 0 10px; }
+ol { padding-left:22px; } li { margin-bottom:8px; }
+.note { border-left:3px solid var(--red); background:var(--panel); padding:14px 18px; margin:24px 0; }
+.note strong { color:var(--text); }
+footer { color:var(--muted); font-size:14px; text-align:center; padding:0 24px 32px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Valheim Deploy</h1>
+  <p class="lead">Your own Valheim server, set up from your browser.</p>
+
+  <div class="cta">
+    <a class="button" id="download" href="https://github.com/drogerschariot/valheim-deploy/releases/latest">Download</a>
+    <p class="free">Free. No account needed to download.</p>
+    <p class="others">
+      <a href="https://github.com/drogerschariot/valheim-deploy/releases/latest/download/valheim-deploy-windows.exe">Windows</a> ·
+      <a href="https://github.com/drogerschariot/valheim-deploy/releases/latest/download/valheim-deploy-macos-arm64">Mac (Apple Silicon)</a> ·
+      <a href="https://github.com/drogerschariot/valheim-deploy/releases/latest/download/valheim-deploy-linux">Linux</a>
+    </p>
+  </div>
+
+  <div class="note">
+    <strong>This is an advanced setup.</strong> You run the server yourself, so you should be comfortable
+    with firewalls, public IP addresses, port forwarding and SSH. Cloud hosting bills you until you delete
+    the server. If that sounds like a lot, a paid Valheim host will be a much better experience.
+  </div>
+
+  <p class="others"><strong>Early release.</strong> Expect rough edges, and check your hosting account after deleting a server.</p>
+
+  <h2>How it works</h2>
+  <ol>
+    <li>Download the app and open it. There is nothing to install.</li>
+    <li>On Windows, if you see “Windows protected your PC”, choose <strong>More info</strong>, then <strong>Run anyway</strong>. The app is not code-signed yet.</li>
+    <li>Your browser opens. Choose where to host: Hetzner Cloud, AWS, a Linux server you already have, or your own computer.</li>
+    <li>Follow the steps, then share the join address and password with your friends.</li>
+  </ol>
+
+  <h2>What you get</h2>
+  <ol>
+    <li>As many servers as you like, all in one dashboard.</li>
+    <li>Live status, players, logs, daily backups and game updates.</li>
+    <li>Your hosting account, your servers and your data. Nothing runs through us.</li>
+  </ol>
+
+  <p><a href="https://github.com/drogerschariot/valheim-deploy/blob/main/docs/getting-started.md">Getting started guide</a> ·
+     <a href="https://github.com/drogerschariot/valheim-deploy">Source code</a></p>
+</main>
+<footer>Not affiliated with Iron Gate or Coffee Stain.</footer>
+<script>
+// Offer the right file. Anything unrecognised keeps the releases page link.
+const base = "https://github.com/drogerschariot/valheim-deploy/releases/latest/download/";
+const ua = navigator.userAgent;
+const pick = /Windows/.test(ua) ? ["valheim-deploy-windows.exe", "Windows"]
+           : /Macintosh/.test(ua) ? ["valheim-deploy-macos-arm64", "Mac (Apple Silicon)"]
+           : /Android|iPhone|iPad/.test(ua) ? null
+           : /Linux/.test(ua) ? ["valheim-deploy-linux", "Linux"] : null;
+if (pick) {
+    const button = document.getElementById("download");
+    button.href = base + pick[0];
+    button.textContent = "Download for " + pick[1];
+}
+</script>
+</body>
+</html>
