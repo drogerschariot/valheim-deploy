@@ -39,6 +39,8 @@ DEFAULTS: dict[str, Any] = {
     "backup_retain": 7,
     "firewall_enabled": True,
     "start_timeout": 300,
+    # Windows app: start this server whenever the app opens.
+    "autostart": True,
 }
 
 PRESETS = ["Normal", "Casual", "Easy", "Hard", "Hardcore", "Immersive", "Hammer"]

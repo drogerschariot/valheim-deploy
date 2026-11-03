@@ -64,12 +64,15 @@ async function openWizard() {
     answers.password = body.suggested_password;
     answers.players = "4";
     answers.world_name = "Dedicated";
+    if (body.hosts.length === 1) answers.host = body.hosts[0].key;  // the Windows app: this PC only
     drawStep();
 }
 
 function drawStep() {
-    $("wizard-steps").replaceChildren(...STEPS.map((s, i) =>
-        el("li", { textContent: `${i + 1}. ${s}`, className: i === wizardStep ? "active" : "" })));
+    const shown = STEPS.map((s, i) => [s, i]).filter(([, i]) => !(i === 1 && options.hosts.length === 1));
+    $("wizard-steps").replaceChildren(...shown.map(([s, i], n) =>
+        el("li", { textContent: `${n + 1}. ${i === 2 && options.hosts.length === 1 ? "This PC" : s}`,
+                   className: i === wizardStep ? "active" : "" })));
     $("wizard-error").textContent = "";
     $("wizard-back").hidden = wizardStep === 0;
     $("wizard-next").textContent = wizardStep === STEPS.length - 1 ? "Create server" : "Continue";
@@ -106,7 +109,7 @@ function stepDetails(body) {
     const players = text("players", "4", "number");
     players.onchange = () => { hostOptions = null; drawStep(); };
     body.append(field("How many players at once?", players, "Sets the size of machine we recommend."));
-    if (answers.host === "local") return detailsLocal(body);
+    if (answers.host === "local" || answers.host === "windows") return detailsLocal(body);
     if (!hostOptions) {
         body.append(el("p", { className: "muted", textContent: "Loading choices…" }));
         loadHostOptions().then(drawStep).catch((e) => { $("wizard-error").textContent = e.message; });
@@ -203,7 +206,7 @@ function detailsAws(body) {
 }
 
 function detailsLocal(body) {
-    const notes = options.hosts.find((h) => h.key === "local").warnings;
+    const notes = options.hosts.find((h) => h.key === answers.host).warnings;
     notes.forEach((n) => body.append(el("div", { className: "note", textContent: n })));
     if (notes.length > 1) body.append(tick("arm_ok", "Continue anyway"));
 }
@@ -305,12 +308,12 @@ async function submitWizard() {
     answers.manage_firewall = !!answers.manage_firewall;
     const { status, body } = await api("/api/servers", { method: "POST", body: JSON.stringify(answers) });
     if (status !== 202) { $("wizard-error").textContent = body.error || `Failed (${status})`; return; }
-    followJob(body.job, `Creating ${answers.name}`, answers.name);
+    followJob(body.job, `Creating ${answers.name}`, answers.name, answers.host === "windows" ? "network" : null);
 }
 
 // -- jobs ------------------------------------------------------------------
 
-async function followJob(id, title, thenSelect) {
+async function followJob(id, title, thenSelect, thenTab) {
     showOnly("job");
     $("job-title").textContent = title;
     $("job-status").textContent = "Working. Keep the app's window open. This can take several minutes.";
@@ -329,6 +332,7 @@ async function followJob(id, title, thenSelect) {
             if (thenSelect) localStorage.setItem("server", thenSelect);
             showOnly("content");
             await loadServers();
+            if (thenTab && body.state === "done") document.querySelector(`[data-tab="${thenTab}"]`).click();
         };
     };
     poll();
@@ -344,12 +348,15 @@ async function startJob(what, body = {}) {
 
 $("new-server").onclick = openWizard;
 $("wizard-cancel").onclick = () => { showOnly("content"); };
-$("wizard-back").onclick = () => { wizardStep -= 1; drawStep(); };
+// With only one place to host, there is nothing to choose on the "Where" step.
+const skipWhere = () => options.hosts.length === 1 && wizardStep === 1;
+$("wizard-back").onclick = () => { wizardStep -= 1; if (skipWhere()) wizardStep -= 1; drawStep(); };
 $("wizard-next").onclick = () => {
     const problem = stepProblem();
     if (problem) { $("wizard-error").textContent = problem; return; }
     if (wizardStep === STEPS.length - 1) { submitWizard(); return; }
     wizardStep += 1;
+    if (skipWhere()) wizardStep += 1;
     drawStep();
 };
 document.querySelectorAll("[data-job]").forEach((b) => { b.onclick = () => startJob(b.dataset.job); });

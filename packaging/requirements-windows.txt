@@ -1,0 +1,4 @@
+# The Windows app only. Everything else in this repo is standard library.
+pyinstaller==6.22.3
+pystray==0.19.5   # the system tray icon
+pillow==12.3.0    # draws the tray and app icons

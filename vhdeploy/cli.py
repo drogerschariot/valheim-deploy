@@ -20,6 +20,21 @@ HOST_CHOICES = ["hetzner", "aws", "existing", "local"]
 READY_TIMEOUT = 25 * 60  # a first start downloads the game, then builds a world
 AGENT_SILENCE_LIMIT = 180
 
+HOME_NOTICE = """\
+This is an ADVANCED setup. The server runs on this PC, and for friends outside
+your home to join you need to be comfortable with:
+
+  * Your router: signing in to it, and forwarding UDP ports to this PC
+  * Firewalls: allowing the game through Windows Firewall
+  * Public IP addresses: yours, whether it changes, and CGNAT, where your
+    internet provider shares one address between customers and no port
+    forward can work
+
+The Network tab walks you through each of these and can do most of it for you,
+but routers differ and some need changing by hand. If that sounds like a lot, a
+paid Valheim host will be a much better experience.
+"""
+
 ADVANCED_NOTICE = """\
 This is an ADVANCED setup. You are about to run a real server, and you are
 responsible for keeping it reachable, patched and paid for. You should be
@@ -42,8 +57,8 @@ def client() -> agent_client.AgentClient:
 def next_port(rec: dict[str, Any]) -> int:
     """First free base port on this machine. Only servers sharing a machine can
     collide; a new cloud VM is empty, so it always gets the default."""
-    if rec["provider"] == "local":
-        same = lambda r: r["provider"] == "local"  # noqa: E731
+    if rec["provider"] in ("local", "windows"):
+        same = lambda r: r["provider"] == rec["provider"]  # noqa: E731
     elif rec["provider"] == "existing":
         same = lambda r: r.get("ssh", {}).get("host") == rec["ssh"]["host"]  # noqa: E731
     else:
@@ -175,7 +190,9 @@ def finish_install(ui: UI, rec: dict[str, Any]) -> None:
     provider(rec["provider"]).install(ui, rec)
     rec["status"] = "installed"
     registry.save(rec)
-    if wait_ready(ui, rec):
+    if provider(rec["provider"]).waits_itself:
+        pass
+    elif wait_ready(ui, rec):
         ui.ok("\nThe server is up.")
     else:
         ui.warn("\nThe server has not reported ready yet. It may still be loading; check its logs "

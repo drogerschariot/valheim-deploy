@@ -54,6 +54,7 @@ class Provider:
     key = ""
     label = ""
     needs_network_setup = False  # True: the user must arrange port forwarding
+    waits_itself = False  # True: install() waits for the server to be ready itself
     # For hosts that need an account: how to make one and how to get the
     # credentials this app needs, shared by the terminal and the browser.
     # {"service", "signup": [step], "credentials": [step], "fields": [field], "stored"}
@@ -156,4 +157,5 @@ def get(key: str) -> Provider:
     from .existing import Existing
     from .hetzner import Hetzner
     from .local import Local
-    return {p.key: p for p in (Local(), Existing(), AWS(), Hetzner())}[key]
+    from .windows import WindowsPC
+    return {p.key: p for p in (Local(), Existing(), AWS(), Hetzner(), WindowsPC())}[key]

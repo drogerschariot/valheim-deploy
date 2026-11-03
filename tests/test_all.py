@@ -13,6 +13,8 @@ import a2s, agent, launcher  # noqa: E402
 from vhdeploy import agent_client, cli, dashboard, jobs, output, paths, registry, settings, ssh  # noqa: E402
 from vhdeploy.providers import aws as aws_mod, awsapi, existing, extract_tar_stream, hetzner, sizing  # noqa: E402
 from vhdeploy.ui import UI  # noqa: E402
+from vhdeploy import winhost  # noqa: E402
+from vhdeploy.winhost import manager as winmanager, network  # noqa: E402
 
 
 def free_udp():
@@ -245,6 +247,194 @@ class AgentSupervised(unittest.TestCase):
         time.sleep(.5)
         self.assertTrue(any("saved on SIGINT" in l for l in self.req("/api/logs")[1]["lines"]))
         self.assertEqual(self.req("/api/action", {"action": "start"})[0], 200)
+
+
+class WindowsHost(unittest.TestCase):
+    """The Windows app's own server runner, with a fake game. On Windows this
+    goes through the real Ctrl+C helper, which is what makes Valheim save."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.env = mock.patch.dict(os.environ, {"VALHEIM_BINARY_ARGV": json.dumps(
+            [sys.executable, str(ROOT / "tests" / "fake_valheim.py")])})
+        cls.env.start()
+        cls.rec = {"name": "win1", "provider": "windows", "status": "installed",
+                   "settings": base_settings(port=free_udp() - 1, server_name="Hall", world_name="Midgard"),
+                   "secrets": {"password": "pw12345"}}
+        cls.manager = winmanager.ServerManager()
+        cls.agent = winmanager.LocalAgent(cls.manager)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.manager.stop_all()
+        cls.env.stop()
+
+    def status(self):
+        return self.agent.call(self.rec, "/api/status")[1]
+
+    def test_run_backup_and_stop_saves(self):
+        self.assertEqual(self.agent.call(self.rec, "/api/action", {"action": "start"})[0], 200)
+        for _ in range(60):
+            if self.status()["service"]["ready"]:
+                break
+            time.sleep(.5)
+        snap = self.status()
+        self.assertTrue(snap["service"]["ready"], self.manager.get("win1").logs(50))
+        query = self.manager.ensure(self.rec)[1].query.get(force=True)  # cached from before it bound
+        self.assertEqual((query["reachable"], query.get("name")), (True, "Hall"), query)
+        self.assertNotIn("pw12345", json.dumps(snap["launch"]))
+        self.assertEqual(snap["launch"]["flags"]["world"], "Midgard")
+        activity = self.manager.ensure(self.rec)[1].activity.get(force=True)
+        self.assertIn("Ragnar", json.dumps(activity))
+
+        world = winhost.instance_dir("win1") / "data" / "worlds_local" / "Midgard"
+        world.mkdir(parents=True)
+        (world / "_main.1.db2").write_bytes(b"x" * 100)
+        status, body = self.agent.call(self.rec, "/api/action", {"action": "backup"})
+        self.assertEqual(status, 200, body)
+        backups = self.agent.call(self.rec, "/api/backups")[1]["backups"]
+        self.assertTrue(backups[0]["name"].endswith(".zip"))
+
+        self.assertEqual(self.agent.call(self.rec, "/api/action", {"action": "stop"})[0], 428)
+        began = time.time()
+        status, body = self.agent.call(self.rec, "/api/action", {"action": "stop", "confirm": True})
+        self.assertEqual(status, 200, body)
+        self.assertLess(time.time() - began, 60)
+        lines = self.manager.get("win1").logs(200)
+        for _ in range(10):  # the tail reads the last lines a moment later
+            if any("saved on SIGINT" in l for l in lines):
+                break
+            time.sleep(.5)
+            lines = self.manager.get("win1").logs(200)
+        self.assertTrue(any("saved on SIGINT" in l for l in lines), lines)
+        self.assertFalse(any("was ended" in l for l in lines), lines)
+        self.assertEqual(self.status()["service"]["active"], "inactive")
+
+    def test_server_left_running_by_a_killed_app_is_stopped_safely(self):
+        rec = {**self.rec, "name": "win3", "settings": {**self.rec["settings"], "port": free_udp() - 1}}
+        first = winmanager.ServerManager()
+        first.ensure(rec)[0].control("start")
+        orphan = first.get("win3").proc
+        first.get("win3").wanted, first.get("win3")._closing = False, True  # the app is gone
+        for _ in range(40):
+            if (winhost.instance_dir("win3") / "server.log").exists():
+                break
+            time.sleep(.25)
+        # The app dies without quitting: the game keeps running.
+        second = winmanager.ServerManager()
+        backend = second.ensure(rec)[0]
+        backend.control("start")
+        orphan.wait(30)
+        self.assertTrue(any("still running from before" in l for l in backend.logs(50)), backend.logs(50))
+        self.assertIsNot(backend.proc, orphan)
+        self.assertIsNone(backend.proc.poll())
+        second.stop_all()
+
+    def test_backup_retention(self):
+        backend = self.manager.ensure({**self.rec, "name": "win2"})[0]
+        world = winhost.instance_dir("win2") / "data" / "worlds_local" / "Midgard"
+        world.mkdir(parents=True)
+        (world / "_main.1.db2").write_bytes(b"x")
+        backend.cfg["backup_retain"] = 2
+        for i in range(4):
+            with mock.patch("vhdeploy.winhost.backend.datetime") as dt:
+                dt.now.return_value.strftime.return_value = f"2026010{i}-000000"
+                dt.now.return_value.isoformat.return_value = "x"
+                self.assertTrue(backend.backup()[0])
+        names = sorted(p.name for p in backend.backup_dir.glob("*.zip"))
+        self.assertEqual(names, ["Midgard-20260102-000000.zip", "Midgard-20260103-000000.zip"])
+        import zipfile
+        with zipfile.ZipFile(backend.backup_dir / names[-1]) as z:
+            self.assertEqual(z.namelist(), ["Midgard/_main.1.db2"])
+
+
+class FakeIGD(BaseHTTPRequestHandler):
+    """A UPnP router: a description document and the WANIPConnection actions."""
+    maps, calls, permanent_ok = {}, [], False
+    SERVICE = "urn:schemas-upnp-org:service:WANIPConnection:1"
+
+    def log_message(self, *a):
+        pass
+
+    def _send(self, code, xml):
+        data = xml.encode()
+        self.send_response(code)
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def do_GET(self):
+        self._send(200, f"""<?xml version="1.0"?><root xmlns="urn:schemas-upnp-org:device-1-0"><device>
+            <deviceList><device><deviceList><device><serviceList><service>
+            <serviceType>{self.SERVICE}</serviceType><controlURL>/ctl/IPConn</controlURL>
+            </service></serviceList></device></deviceList></device></deviceList></device></root>""")
+
+    def do_POST(self):
+        import re as _re
+        body = self.rfile.read(int(self.headers["Content-Length"])).decode()
+        action = self.headers["SOAPAction"].strip('"').split("#")[1]
+        args = dict(_re.findall(r"<(New\w+)>([^<]*)</New\w+>", body))
+        FakeIGD.calls.append((action, args))
+        fault = lambda code, text: self._send(500, f"""<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><s:Fault>
+            <detail><UPnPError xmlns="urn:schemas-upnp-org:control-1-0"><errorCode>{code}</errorCode>
+            <errorDescription>{text}</errorDescription></UPnPError></detail></s:Fault></s:Body></s:Envelope>""")
+        reply = ""
+        if action == "AddPortMapping":
+            if args["NewLeaseDuration"] == "0" and not FakeIGD.permanent_ok:
+                return fault(725, "OnlyPermanentLeasesSupported")
+            FakeIGD.maps[args["NewExternalPort"]] = args["NewInternalClient"]
+        elif action == "GetSpecificPortMappingEntry":
+            if args["NewExternalPort"] not in FakeIGD.maps:
+                return fault(714, "NoSuchEntryInArray")
+            reply = f"<NewInternalClient>{FakeIGD.maps[args['NewExternalPort']]}</NewInternalClient>"
+        elif action == "DeletePortMapping":
+            FakeIGD.maps.pop(args["NewExternalPort"], None)
+        elif action == "GetExternalIPAddress":
+            reply = "<NewExternalIPAddress>100.72.1.9</NewExternalIPAddress>"
+        self._send(200, f"""<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body>
+            <u:{action}Response xmlns:u="{self.SERVICE}">{reply}</u:{action}Response></s:Body></s:Envelope>""")
+
+
+class Network(unittest.TestCase):
+    def test_route_print_picks_lowest_metric_gateway(self):
+        text = """Network Destination        Netmask          Gateway       Interface  Metric
+          0.0.0.0          0.0.0.0      192.168.1.1    192.168.1.50     35
+          0.0.0.0          0.0.0.0         On-link     10.0.0.5        5
+          0.0.0.0          0.0.0.0      10.0.0.1       10.0.0.5        25"""
+        self.assertEqual(network.parse_route_print(text), "10.0.0.1")
+        self.assertIsNone(network.parse_route_print("nothing here"))
+
+    def test_nat_types(self):
+        self.assertEqual(network.nat_type("100.72.1.9", "198.51.100.7"), "cgnat")
+        self.assertEqual(network.nat_type("192.168.0.2", "198.51.100.7"), "double")
+        self.assertEqual(network.nat_type("198.51.100.7", "198.51.100.7"), "ok")
+        self.assertEqual(network.nat_type("198.51.100.8", "198.51.100.7"), "cgnat")
+        self.assertEqual(network.nat_type(None, "198.51.100.7"), "unknown")
+
+    def test_upnp_forward_lifecycle(self):
+        srv = HTTPServer(("127.0.0.1", 0), FakeIGD)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            control, service = network.wan_service(f"http://127.0.0.1:{srv.server_port}/desc.xml")
+            self.assertEqual(control, f"http://127.0.0.1:{srv.server_port}/ctl/IPConn")
+            router = network.Router(control, service)
+            self.assertEqual(router.external_ip(), "100.72.1.9")
+            self.assertIsNone(router.mapping(2456))
+            router.add(2456, "192.168.1.50", "Valheim a & b")  # retries with a lease after 725
+            self.assertEqual(router.mapping(2456), "192.168.1.50")
+            leases = [a["NewLeaseDuration"] for name, a in FakeIGD.calls if name == "AddPortMapping"]
+            self.assertEqual(leases, ["0", "604800"])
+            router.remove(2456)
+            self.assertIsNone(router.mapping(2456))
+        finally:
+            srv.shutdown()
+
+    def test_firewall_rule_is_udp_for_the_game_only(self):
+        add = network.firewall_commands("add", "alpha", 2466)[-1]
+        self.assertIn("protocol=UDP", add)
+        self.assertIn("localport=2466-2467", add)
+        self.assertTrue(any(a.startswith("program=") and a.endswith("valheim_server.exe") for a in add))
+        self.assertEqual(network.firewall_commands("remove", "alpha", 2466)[0][4:6], ["rule", "name=Valheim Deploy alpha"])
 
 
 class FakeHetzner(BaseHTTPRequestHandler):
@@ -644,6 +834,23 @@ class Dashboard(unittest.TestCase):
         self.assertNotIn(b"SECRET-T", raw)
         self.assertIsNone(registry.credential("hcloud_token"))
         self.assertEqual(self.http("POST", "/api/wizard/connect", {"host": "local"}, cookie=cookie)[0], 400)
+
+    def test_this_pc_routes_refuse_other_hosts_and_save_autostart(self):
+        cookie = self.login()
+        self.assertEqual(self.http("POST", "/api/servers/alpha/autostart", {"on": False}, cookie=cookie)[0], 409)
+        registry.save({"name": "pc", "provider": "windows", "status": "installed", "ssh": {},
+                       "settings": base_settings(), "secrets": {"password": "pw12345"}})
+        try:
+            status, raw, *_ = self.http("POST", "/api/servers/pc/autostart", {"on": False}, cookie=cookie)
+            self.assertEqual((status, json.loads(raw)["autostart"]), (200, False))
+            self.assertFalse(registry.load("pc")["settings"]["autostart"])
+            listed = json.loads(self.http("GET", "/api/servers", cookie=cookie)[1])
+            pc = next(s for s in listed["servers"] if s["name"] == "pc")
+            self.assertTrue(pc["this_pc"])
+            self.assertFalse(listed["app_mode"])
+            self.assertEqual(self.http("POST", "/api/app/quit", {}, cookie=cookie)[0], 404)  # only in the app
+        finally:
+            registry.remove("pc")
 
     def test_unknown_server_and_traversal(self):
         cookie = self.login()

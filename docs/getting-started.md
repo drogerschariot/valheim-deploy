@@ -1,17 +1,92 @@
 # Getting started
 
-Open the app, and the setup page opens in your browser. It asks where to host,
-and for Hetzner, AWS or a rented server it asks whether you already have an
-account. If you don't, it walks you through making one, then through getting the
-key or token it needs, with links to each page. This page is the same steps, to
-read ahead. If you get stuck on one, try Hetzner: it needs the least setup.
+## On your Windows PC
+
+### What you need
+
+- Windows 10 or 11, 64-bit, with about 3 GB of free disk for the game and worlds.
+- At least 8 GB of RAM if you play on the same PC. Each server uses 2-4 GB, more
+  as the world is explored.
+- Access to your router's settings, to forward ports, unless the app can do it
+  for you through UPnP.
+- An internet connection with its own public IPv4 address, not CGNAT. The Network
+  tab checks this for you.
+
+### First server
+
+1. Install and open the app (see the [README](../README.md#get-started)).
+2. Read and accept the advanced-setup warning.
+3. Choose a short name, the server name players see, a world name and a password.
+   The password must be at least 5 characters, and not part of the server name.
+4. Press **Create server**. The first time, the app downloads SteamCMD and the
+   Valheim server, about 1 GB. Later servers share that install and start straight
+   away.
+5. When it's ready, the dashboard opens the **Network** tab.
+
+### The Network tab, step by step
+
+**1. Windows Firewall.** Press **Add firewall rule** and choose **Yes** when
+Windows asks for permission. The rule allows only the server's two UDP ports, and
+only for `valheim_server.exe`. If you use another firewall or antivirus suite, allow
+the same ports there too.
+
+**2. Router port forwarding.** Press **Open ports automatically**. The app asks
+your router, over UPnP, to send the game ports to this PC. If the router doesn't
+answer, UPnP is probably off; you can turn it on in the router, or forward by hand:
+
+1. Open your router's page. The tab shows its address, often `http://192.168.1.1`
+   or `http://192.168.0.1`. The sign-in is often printed on the router.
+2. Find **Port Forwarding**. Routers also call it Virtual Server, NAT, Applications
+   or Gaming.
+3. Add a rule: protocol **UDP**, ports **2456-2457** (the tab shows each server's
+   own ports), to this PC's LAN address, which the tab also shows.
+4. Reserve that LAN address for this PC, under DHCP or LAN settings, so it doesn't
+   change and break the rule.
+
+**3. Your internet connection.** The tab compares your router's internet address
+with your public IP:
+
+- **Same:** port forwarding works.
+- **Your provider uses CGNAT:** the router's address starts with 100.64 to
+  100.127, or doesn't match your public IP. Your provider shares one public
+  address between customers, so no setting at home can let friends in. Ask the
+  provider for a public IPv4 address; many give one free or for a small fee.
+  Players on your own network can still join.
+- **A second router in front:** often the provider's modem-router. Forward the
+  ports on it too, to your own router's address, or put it in bridge mode.
+
+**4. What to send friends.** The internet join address (`public IP:port`) and the
+password, from the Connect tab. Players in your home use the home-network address
+instead.
+
+Then ask a friend outside your home to join. That's the real test: checking from
+inside your own network can fail even when the setup is right.
+
+### Day to day
+
+- **Opening the app** starts servers that have **Start when the app opens** ticked.
+- **Closing the window** leaves them running in the system tray.
+- **Quit**, in the tray or the dashboard, stops them and saves each world.
+- **Update game**, after Valheim updates, so players can join again.
+- **Your public IP can change**, often when the router restarts. The Network tab
+  warns you, and shows the new join address to send. A dynamic DNS name, which
+  many routers offer, gives friends an address that never changes.
+
+## Other hosts (command line)
+
+These use the command-line tool from the repo, not the Windows app. See the
+[README](../README.md#command-line-tool-and-other-hosts).
+
+The command-line wizard asks where to host, and for Hetzner, AWS or a rented
+server it asks whether you already have an account. If you don't, it walks you
+through making one, then through getting the key or token it needs. If you get
+stuck on one, try Hetzner: it needs the least setup.
 
 Keys and tokens you paste are checked with the provider straight away, and kept
-only on your computer, in `credentials.json` in the app's folder
-(`~/.valheim-deploy`, or `%USERPROFILE%\.valheim-deploy` on Windows). Delete the
+only on your computer, in `credentials.json` in `~/.valheim-deploy`. Delete the
 key or token at the provider to revoke it.
 
-## Hetzner Cloud (recommended)
+### Hetzner Cloud (recommended)
 
 1. [Create a Hetzner account](https://accounts.hetzner.com/signUp). Hetzner may ask
    for a payment method or proof of identity before you can create servers.
@@ -24,7 +99,7 @@ key or token at the provider to revoke it.
 The firewall is done for you. Billing runs until you press **Delete server**;
 stopping the game does not stop it.
 
-## AWS
+### AWS
 
 No AWS tools need installing.
 
@@ -49,7 +124,7 @@ The region needs a default VPC, which new accounts have. The firewall is done fo
 you. AWS usually costs noticeably more than Hetzner for a server that runs all the
 time.
 
-## A Linux server you already have, or rent
+### A Linux server you already have, or rent
 
 For a VPS from another provider, such as DigitalOcean, Akamai Linode, Vultr or
 OVHcloud, answer **No, help me rent one**. The app lists what to choose and makes
@@ -68,7 +143,7 @@ Then open the game ports yourself. See [port forwarding](#port-forwarding).
 The option to let the installer manage ufw blocks all other inbound traffic except
 SSH and the game ports. Leave it off if this machine runs anything else.
 
-## This computer
+### This computer
 
 Install [Docker Desktop](https://www.docker.com/products/docker-desktop/) and start
 it, then choose **This computer**. The server stops when the computer sleeps or
@@ -79,7 +154,7 @@ Then open the game ports yourself. See [port forwarding](#port-forwarding).
 On Apple Silicon and other ARM computers the server runs under emulation, which is
 likely to be slow and unreliable.
 
-## Port forwarding
+### Port forwarding
 
 Needed for a server at home. Cloud servers do not need this.
 
