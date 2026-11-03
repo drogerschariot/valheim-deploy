@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Valheim Deploy: your own Valheim server</title>
-<meta name="description" content="Create your own Valheim dedicated servers and run them from one dashboard. Free download for Windows, Mac and Linux.">
+<meta name="description" content="Run your own Valheim dedicated servers on your Windows PC, from one dashboard. Free download for Windows.">
 <style>
 :root { --bg:#14110e; --panel:#1d1914; --edge:#3a3026; --edge2:#56462f; --gold:#c8a45c; --text:#e6dcc6; --muted:#9a9080; --red:#b4553f;
         --serif:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif; }
@@ -21,7 +21,7 @@ h1 { color:var(--gold); font-size:42px; letter-spacing:.04em; font-weight:600; m
 .others { font-size:15px; margin:6px 0 0; color:var(--muted); }
 a { color:var(--gold); }
 h2 { color:var(--gold); font-size:22px; font-weight:600; margin:36px 0 10px; }
-ol { padding-left:22px; } li { margin-bottom:8px; } li ul { padding-left:20px; margin:8px 0 0; }
+ol { padding-left:22px; } li { margin-bottom:8px; } 
 .note { border-left:3px solid var(--red); background:var(--panel); padding:14px 18px; margin:24px 0; }
 .note strong { color:var(--text); }
 footer { color:var(--muted); font-size:14px; text-align:center; padding:0 24px 32px; }
@@ -30,44 +30,42 @@ footer { color:var(--muted); font-size:14px; text-align:center; padding:0 24px 3
 <body>
 <main>
   <h1>Valheim Deploy</h1>
-  <p class="lead">Your own Valheim server, set up from your browser.</p>
+  <p class="lead">Run your own Valheim servers on your Windows PC, from one dashboard.</p>
 
   <div class="cta">
-    <a class="button" id="download" href="https://github.com/drogerschariot/valheim-deploy/releases/latest">Download</a>
-    <p class="free">Free. No account needed to download.</p>
-    <p class="others">
-      <a href="https://github.com/drogerschariot/valheim-deploy/releases/latest/download/valheim-deploy-windows.exe">Windows</a> ·
-      <a href="https://github.com/drogerschariot/valheim-deploy/releases/latest/download/valheim-deploy-macos-arm64.zip">Mac (Apple Silicon)</a> ·
-      <a href="https://github.com/drogerschariot/valheim-deploy/releases/latest/download/valheim-deploy-linux">Linux</a>
-    </p>
+    <a class="button" id="download" href="https://github.com/drogerschariot/valheim-deploy/releases/latest/download/ValheimDeploy-Setup.exe">Download for Windows</a>
+    <p class="free">Free. Windows 10 or 11, 64-bit. No account needed.</p>
+    <p class="others" id="not-windows" hidden>Valheim Deploy is for Windows PCs only for now.</p>
   </div>
 
   <div class="note">
-    <strong>This is an advanced setup.</strong> You run the server yourself, so you should be comfortable
-    with firewalls, public IP addresses, port forwarding and SSH. Cloud hosting bills you until you delete
-    the server. If that sounds like a lot, a paid Valheim host will be a much better experience.
+    <strong>This is an advanced setup.</strong> The server runs on your PC, so for friends outside your home
+    to join you'll need to sign in to your router and forward ports, allow the game through Windows Firewall,
+    and know your public IP address. The app walks you through all of it and does what it can for you, but
+    some internet providers (those using CGNAT) make home hosting impossible. If that sounds like a lot, a
+    paid Valheim host will be a much better experience.
   </div>
 
-  <p class="others"><strong>Early release.</strong> Expect rough edges, and check your hosting account after deleting a server.</p>
+  <p class="others"><strong>Early release.</strong> Expect rough edges, and keep backups of worlds you care about.</p>
 
   <h2>How it works</h2>
   <ol>
-    <li>Download the app and open it. There is nothing to install.</li>
-    <li>The app is not code-signed yet, so the first time you open it your computer warns you:
-      <ul>
-        <li><strong>Windows:</strong> on “Windows protected your PC”, choose <strong>More info</strong>, then <strong>Run anyway</strong>.</li>
-        <li><strong>Mac:</strong> open the downloaded zip, then double-click <strong>valheim-deploy-macos-arm64</strong>. When macOS says it was “Not Opened”, choose <strong>Done</strong>. Open <strong>System Settings &gt; Privacy &amp; Security</strong>, scroll down, choose <strong>Open Anyway</strong>, and confirm. After that it opens normally.</li>
-      </ul>
-    </li>
-    <li>Your browser opens. Choose where to host: Hetzner Cloud, AWS, a Linux server you already have, or your own computer.</li>
-    <li>Follow the steps, then share the join address and password with your friends.</li>
+    <li>Run <strong>ValheimDeploy-Setup.exe</strong>. The app isn't code-signed yet, so Windows may say
+        “Windows protected your PC”: choose <strong>More info</strong>, then <strong>Run anyway</strong>.
+        It installs for you only, with no admin prompt.</li>
+    <li>Double-click <strong>Valheim Deploy</strong> on your desktop. The dashboard opens.</li>
+    <li>Create a server. The app downloads the Valheim server from Steam (about 1 GB, once) and starts it.</li>
+    <li>Work through the <strong>Network</strong> tab: firewall, router port forwarding, and a check of your
+        internet connection. Then send friends the join address and password.</li>
   </ol>
 
   <h2>What you get</h2>
   <ol>
-    <li>As many servers as you like, all in one dashboard.</li>
-    <li>Live status, players, logs, daily backups and game updates.</li>
-    <li>Your hosting account, your servers and your data. Nothing runs through us.</li>
+    <li>As many servers as you like, all in one dashboard, each started with one click or automatically
+        when you open the app.</li>
+    <li>Live status, players, logs, daily backups, and one-click game updates.</li>
+    <li>Closing the window keeps your servers running from the system tray. Quit stops them, saving every world first.</li>
+    <li>Your PC, your servers, your worlds. Nothing runs through us.</li>
   </ol>
 
   <p><a href="https://github.com/drogerschariot/valheim-deploy/blob/main/docs/getting-started.md">Getting started guide</a> ·
@@ -75,17 +73,9 @@ footer { color:var(--muted); font-size:14px; text-align:center; padding:0 24px 3
 </main>
 <footer>Not affiliated with Iron Gate or Coffee Stain.</footer>
 <script>
-// Offer the right file. Anything unrecognised keeps the releases page link.
-const base = "https://github.com/drogerschariot/valheim-deploy/releases/latest/download/";
-const ua = navigator.userAgent;
-const pick = /Windows/.test(ua) ? ["valheim-deploy-windows.exe", "Windows"]
-           : /Macintosh/.test(ua) ? ["valheim-deploy-macos-arm64.zip", "Mac (Apple Silicon)"]
-           : /Android|iPhone|iPad/.test(ua) ? null
-           : /Linux/.test(ua) ? ["valheim-deploy-linux", "Linux"] : null;
-if (pick) {
-    const button = document.getElementById("download");
-    button.href = base + pick[0];
-    button.textContent = "Download for " + pick[1];
+// The installer is Windows-only. Say so to everyone else rather than hand them a file they cannot run.
+if (!/Windows/.test(navigator.userAgent)) {
+    document.getElementById("not-windows").hidden = false;
 }
 </script>
 </body>

@@ -15,6 +15,72 @@ your computer                              game host (cloud VM, Linux box, or Do
 - **`packaging/`** builds it into a single-file app with PyInstaller.
 - **`host/`** is what lands on a game host. Standard library only.
 
+## The Windows app
+
+```
+ValheimDeploy.exe (one process, no console)
+ ├─ tray icon (pystray)
+ ├─ dashboard on 127.0.0.1:8456 (dashboard.py, unchanged routes plus Network)
+ │    └─ LocalAgent: host/agent.py's API, answered in-process (agent.handle)
+ ├─ ServerManager: one WindowsBackend per server → valheim_server.exe
+ └─ window: Edge in app mode (msedge --app=URL), else the default browser
+```
+
+- **`vhdeploy/winapp.py`** is the entry point: single instance, window, tray,
+  and the `--quit`, `--send-ctrl-c` and `--firewall` helper modes.
+- **`vhdeploy/winhost/`** runs the servers and checks the network.
+- **`providers/windows.py`** plugs it into the same create and delete flow.
+
+**Servers run on the PC, natively.** Valheim ships a Windows dedicated server, so
+there's no Docker, VM or SSH. The app is the supervisor, so servers run while
+it runs, which is why closing the window only hides it.
+
+**The same agent API, in-process.** `host/agent.py`'s request handling is a plain
+function, `handle()`. The Windows app calls it directly with its own backend and
+collectors, so the dashboard and its JavaScript serve both kinds of server
+without knowing which is which. `Collectors` is subclassed only where it read
+`/proc`.
+
+**An Edge app window, not a bundled browser.** Edge is on every Windows 10 and 11
+PC. `--app` gives a plain window with its own taskbar entry and profile. It adds
+no WebView2 or .NET dependency, and reuses the web UI as is.
+
+**One shared game install.** Every server must run the version players have,
+so one copy serves them all. **Update game** stops whatever is running, backs it
+up, updates, and starts it again.
+
+**Standard library, except the tray.** UPnP, SOAP, firewall rules and process
+control use only the standard library and `ctypes`. `pystray` and `Pillow` are the
+only dependencies, and only for the packaged Windows app.
+
+**A per-user installer.** Inno Setup, per user: no admin prompt, which matters
+for an unsigned app. Data lives in `%LOCALAPPDATA%\ValheimDeploy` and survives
+uninstalling unless the user asks. Install and uninstall both run `--quit` first,
+so an upgrade can't kill a server mid-save.
+
+### Windows traps
+
+- **Valheim saves only on Ctrl+C, and Windows can't signal another process.**
+  `winhost/ctrlc.py` starts a short-lived helper that attaches to the server's
+  console and raises Ctrl+C on it. Two rules hold this together:
+  - The game must not be started with `CREATE_NEW_PROCESS_GROUP`, which disables
+    Ctrl+C for it.
+  - The app itself must never call `SetConsoleCtrlHandler(NULL, TRUE)`. That
+    "ignore Ctrl+C" flag is inherited, so every server started afterwards could
+    never be stopped safely. Only the helper sets it.
+- **The game outlives the app.** If the app is killed rather than quit, its
+  servers keep running and hold their ports, so a fresh start would crash-loop.
+  Each server's PID is recorded. Before starting, the app checks for a leftover
+  with that PID and the right program, and stops it with Ctrl+C so it saves.
+- **The Windows server writes its log only to `-logFile`.** The backend tails that
+  file for logs and readiness.
+- **A blocking socket read isn't interrupted by Ctrl+C on Windows.** That
+  affected the fake game in tests, not the app.
+- **`ipaddress.is_private` includes documentation and reserved ranges.** NAT
+  detection uses only the RFC 1918 home ranges and 100.64.0.0/10.
+- **Some routers accept only port mappings that expire.** The app falls back to
+  a week-long mapping and re-adds its mappings each time it starts.
+
 ## Decisions
 
 **One install path.** AWS and Hetzner create a VM and hand over to the same SSH
@@ -113,22 +179,28 @@ endpoints, and Hetzner and AWS against fake backends.
 
 | Path | Status |
 |---|---|
-| Browser wizard: create, live progress, download backups, delete | **Run for real** in Chrome against Ubuntu 24.04 under systemd, arm64, with a fake game. The x86 check and 32-bit packages were patched out in a throwaway copy |
+| Windows app: server runner, Ctrl+C stop, backups, leftover-server cleanup | **Run in Windows CI** with a fake game: start, ready, backup, stop through the real Ctrl+C helper with the world saved. Also unit tested on macOS |
+| Windows installer: install, create a server, quit, auto-start, uninstall | **Run in Windows CI** by `packaging/smoke_windows.py` against the installed app, with a fake game |
+| Windows app dashboard: wizard, Network tab, Start-on-open switch, Quit | **Clicked through in Chrome** on macOS, with a fake game and a fake router |
+| UPnP | **Fake router only.** SOAP and description shapes follow the UPnP IGD spec |
+| Windows Firewall rule through UAC | **Not run.** CI can't answer a UAC prompt |
+| Edge app window and tray icon | **Not run.** CI has no desktop |
+| Real Valheim Windows server, real SteamCMD download | **Not yet run** |
+| Browser wizard (CLI dashboard): create, live progress, download backups, delete | **Run for real** in Chrome against Ubuntu 24.04 under systemd, arm64, with a fake game. The x86 check and 32-bit packages were patched out in a throwaway copy |
 | Terminal wizard, SSH install, systemd units, sudo rules, ufw, tunnel, day-two commands | **Run for real** the same way, two servers on one host |
 | Docker image, entrypoint, privilege drop, volumes, port publishing, SIGINT stop | **Run for real**, natively on arm64 with a fake game and without the 32-bit packages |
-| Packaged macOS app | **Run for real**: version, list, dashboard, wizard data from the bundle, second launch. Installing a server from the packaged app has not been run |
-| Packaged Windows and Linux apps | **Built and smoke tested in CI** only |
-| Update game, Fix my IP and Retry install buttons | Endpoints unit tested, not clicked through |
-| Real Steam download and the real Valheim binary | **Not yet run through this repo** |
 | Hetzner API | **Fake backend only.** Request shapes come from third-party docs and client libraries |
-| AWS | **Fake EC2 endpoint only.** Request signing matches the `aws` CLI byte for byte for EC2 and STS. Query parameter names and response shapes come from the EC2 API reference. No real resources have been created |
-| Account walk-throughs | Endpoints and the connect checks are unit tested. The steps and links have not been followed with a new account |
-| Real x86-64 Ubuntu host | **Not yet run** |
-| Windows use: icacls key permissions, paths with spaces, Docker Desktop, SSH | **Not run on a real PC** |
+| AWS | **Fake EC2 endpoint only.** Request signing matches the `aws` CLI byte for byte for EC2 and STS. No real resources have been created |
 | Crossplay | Join-code parsing is tested against an assumed log line, not real output |
 
-**Before publishing a release, on a real Windows PC: download the app, create a
-real Hetzner server, join it from the game, and delete it. Do the same once on AWS.**
+**Before calling the Windows app ready, on a real Windows PC:**
+1. Install it, then create a server, which downloads the real game.
+2. Add the firewall rule, and open ports through UPnP or by hand.
+3. Have a friend outside the home join.
+4. Close the window and check the server keeps running.
+5. Quit, and check the log shows the world saved.
+6. Reopen the app and check the server starts by itself.
+7. Delete the server and uninstall.
 
 ### Testing on Apple Silicon
 
