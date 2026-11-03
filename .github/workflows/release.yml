@@ -76,4 +76,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
           REPO: ${{ github.repository }}
-        run: gh release create "$TAG" apps/* --repo "$REPO" --title "$TAG" --generate-notes
+        # A release made on the GitHub website first has no files. Attach them
+        # to it rather than failing, or every download link 404s.
+        run: |
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            gh release upload "$TAG" apps/* --repo "$REPO" --clobber
+          else
+            gh release create "$TAG" apps/* --repo "$REPO" --title "$TAG" --generate-notes
+          fi
