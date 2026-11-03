@@ -517,10 +517,12 @@ class Collectors:
         entries.sort(key=lambda e: e["modified"], reverse=True)
         return {"total_bytes": total, "files": entries[:12]}
 
+    BACKUP_GLOB = "*.tar.gz"
+
     def list_backups(self) -> list[dict[str, Any]]:
         out = []
         if self.backup_dir.is_dir():
-            for path in sorted(self.backup_dir.glob("*.tar.gz"), reverse=True):
+            for path in sorted(self.backup_dir.glob(self.BACKUP_GLOB), reverse=True):
                 try:
                     st = path.stat()
                 except OSError:
@@ -630,16 +632,66 @@ class Collectors:
         }
 
 
-def make_handler(token: str, c: Collectors, backend: Any) -> type[BaseHTTPRequestHandler]:
-    def perform(action: str) -> tuple[bool, str]:
-        if action in {"start", "stop", "restart"}:
-            return backend.control(action)
-        if action == "backup":
-            result = backend.backup()
-            c.backups.get(force=True)
-            return result
-        return backend.update_check()
+def handle(c: Collectors, backend: Any, method: str, path: str, query: dict[str, list[str]],
+           body: dict[str, Any]) -> tuple[int, Any]:
+    """One API request, minus HTTP. The Windows app serves the same API
+    in-process by calling this directly."""
+    if method == "GET":
+        if path == "/api/status":
+            return HTTPStatus.OK, c.snapshot()
+        if path == "/api/logs":
+            try:
+                n = min(int(query.get("n", ["200"])[0]), 1000)
+            except ValueError:
+                n = 200
+            return HTTPStatus.OK, {"lines": backend.logs(n)}
+        if path == "/api/backups":
+            return HTTPStatus.OK, {"backups": c.backups.get()}
+        return HTTPStatus.NOT_FOUND, {"error": "not found"}
 
+    if path == "/api/action":
+        action = str(body.get("action", ""))
+        if action not in ACTIONS:
+            return HTTPStatus.BAD_REQUEST, {"error": "unknown action"}
+        if action in CONFIRM_REQUIRED and not body.get("confirm"):
+            return HTTPStatus.PRECONDITION_REQUIRED, {
+                "error": "confirmation required",
+                "action": action,
+                "detail": "Stopping saves the world first, which can take a minute. "
+                          "Anyone connected is disconnected.",
+            }
+        if action in {"start", "stop", "restart"}:
+            ok, detail = backend.control(action)
+        elif action == "backup":
+            ok, detail = backend.backup()
+            c.backups.get(force=True)
+        else:
+            ok, detail = backend.update_check()
+        c.service.get(force=True)
+        c.flags.get(force=True)
+        return (HTTPStatus.OK if ok else HTTPStatus.INTERNAL_SERVER_ERROR), {"ok": ok, "detail": detail}
+
+    if path == "/api/list":
+        name = str(body.get("list", ""))
+        entry = str(body.get("entry", "")).strip()
+        op = str(body.get("op", ""))
+        if name not in c.list_files or op not in {"add", "remove"}:
+            return HTTPStatus.BAD_REQUEST, {"error": "bad request"}
+        if not LIST_ENTRY.match(entry):
+            return HTTPStatus.BAD_REQUEST, {"error": "entries look like Steam_76561198000000000"}
+        entries = c.read_list(name)
+        if op == "add" and entry not in entries:
+            entries.append(entry)
+        elif op == "remove":
+            entries = [e for e in entries if e != entry]
+        ok, err = c.write_list(name, entries)
+        return ((HTTPStatus.OK if ok else HTTPStatus.INTERNAL_SERVER_ERROR),
+                {"ok": ok, "error": err, "entries": c.read_list(name)})
+
+    return HTTPStatus.NOT_FOUND, {"error": "not found"}
+
+
+def make_handler(token: str, c: Collectors, backend: Any) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
         server_version = "valheim-agent"
         sys_version = ""
@@ -673,71 +725,18 @@ def make_handler(token: str, c: Collectors, backend: Any) -> type[BaseHTTPReques
                 pass
             return {}
 
-        def do_GET(self) -> None:  # noqa: N802
+        def _serve(self, method: str) -> None:
             if not self._authed():
                 return
             route = urlparse(self.path)
-            if route.path == "/api/status":
-                self._json(HTTPStatus.OK, c.snapshot())
-            elif route.path == "/api/logs":
-                try:
-                    n = min(int(parse_qs(route.query).get("n", ["200"])[0]), 1000)
-                except ValueError:
-                    n = 200
-                self._json(HTTPStatus.OK, {"lines": backend.logs(n)})
-            elif route.path == "/api/backups":
-                self._json(HTTPStatus.OK, {"backups": c.backups.get()})
-            else:
-                self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+            body = self._body() if method == "POST" else {}
+            self._json(*handle(c, backend, method, route.path, parse_qs(route.query), body))
+
+        def do_GET(self) -> None:  # noqa: N802
+            self._serve("GET")
 
         def do_POST(self) -> None:  # noqa: N802
-            if not self._authed():
-                return
-            path = urlparse(self.path).path
-            body = self._body()
-
-            if path == "/api/action":
-                action = str(body.get("action", ""))
-                if action not in ACTIONS:
-                    self._json(HTTPStatus.BAD_REQUEST, {"error": "unknown action"})
-                    return
-                if action in CONFIRM_REQUIRED and not body.get("confirm"):
-                    self._json(HTTPStatus.PRECONDITION_REQUIRED, {
-                        "error": "confirmation required",
-                        "action": action,
-                        "detail": "Stopping sends SIGINT and waits for the world save. "
-                                  "Anyone connected is disconnected.",
-                    })
-                    return
-                ok, detail = perform(action)
-                c.service.get(force=True)
-                c.flags.get(force=True)
-                self._json(HTTPStatus.OK if ok else HTTPStatus.INTERNAL_SERVER_ERROR,
-                           {"ok": ok, "detail": detail})
-                return
-
-            if path == "/api/list":
-                name = str(body.get("list", ""))
-                entry = str(body.get("entry", "")).strip()
-                op = str(body.get("op", ""))
-                if name not in c.list_files or op not in {"add", "remove"}:
-                    self._json(HTTPStatus.BAD_REQUEST, {"error": "bad request"})
-                    return
-                if not LIST_ENTRY.match(entry):
-                    self._json(HTTPStatus.BAD_REQUEST,
-                               {"error": "entries look like Steam_76561198000000000"})
-                    return
-                entries = c.read_list(name)
-                if op == "add" and entry not in entries:
-                    entries.append(entry)
-                elif op == "remove":
-                    entries = [e for e in entries if e != entry]
-                ok, err = c.write_list(name, entries)
-                self._json(HTTPStatus.OK if ok else HTTPStatus.INTERNAL_SERVER_ERROR,
-                           {"ok": ok, "error": err, "entries": c.read_list(name)})
-                return
-
-            self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+            self._serve("POST")
 
     return Handler
 

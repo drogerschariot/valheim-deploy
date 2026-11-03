@@ -13,6 +13,8 @@ import a2s, agent, launcher  # noqa: E402
 from vhdeploy import agent_client, cli, dashboard, jobs, output, paths, registry, settings, ssh  # noqa: E402
 from vhdeploy.providers import aws as aws_mod, awsapi, existing, extract_tar_stream, hetzner, sizing  # noqa: E402
 from vhdeploy.ui import UI  # noqa: E402
+from vhdeploy import winhost  # noqa: E402
+from vhdeploy.winhost import manager as winmanager  # noqa: E402
 
 
 def free_udp():
@@ -245,6 +247,84 @@ class AgentSupervised(unittest.TestCase):
         time.sleep(.5)
         self.assertTrue(any("saved on SIGINT" in l for l in self.req("/api/logs")[1]["lines"]))
         self.assertEqual(self.req("/api/action", {"action": "start"})[0], 200)
+
+
+class WindowsHost(unittest.TestCase):
+    """The Windows app's own server runner, with a fake game. On Windows this
+    goes through the real Ctrl+C helper, which is what makes Valheim save."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.env = mock.patch.dict(os.environ, {"VALHEIM_BINARY_ARGV": json.dumps(
+            [sys.executable, str(ROOT / "tests" / "fake_valheim.py")])})
+        cls.env.start()
+        cls.rec = {"name": "win1", "provider": "windows", "status": "installed",
+                   "settings": base_settings(port=free_udp() - 1, server_name="Hall", world_name="Midgard"),
+                   "secrets": {"password": "pw12345"}}
+        cls.manager = winmanager.ServerManager()
+        cls.agent = winmanager.LocalAgent(cls.manager)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.manager.stop_all()
+        cls.env.stop()
+
+    def status(self):
+        return self.agent.call(self.rec, "/api/status")[1]
+
+    def test_run_backup_and_stop_saves(self):
+        self.assertEqual(self.agent.call(self.rec, "/api/action", {"action": "start"})[0], 200)
+        for _ in range(60):
+            if self.status()["service"]["ready"]:
+                break
+            time.sleep(.5)
+        snap = self.status()
+        self.assertTrue(snap["service"]["ready"], self.manager.get("win1").logs(50))
+        query = self.manager.ensure(self.rec)[1].query.get(force=True)  # cached from before it bound
+        self.assertEqual((query["reachable"], query.get("name")), (True, "Hall"), query)
+        self.assertNotIn("pw12345", json.dumps(snap["launch"]))
+        self.assertEqual(snap["launch"]["flags"]["world"], "Midgard")
+        self.assertIn("Ragnar", json.dumps(snap["activity"]))
+
+        world = winhost.instance_dir("win1") / "data" / "worlds_local" / "Midgard"
+        world.mkdir(parents=True)
+        (world / "_main.1.db2").write_bytes(b"x" * 100)
+        status, body = self.agent.call(self.rec, "/api/action", {"action": "backup"})
+        self.assertEqual(status, 200, body)
+        backups = self.agent.call(self.rec, "/api/backups")[1]["backups"]
+        self.assertTrue(backups[0]["name"].endswith(".zip"))
+
+        self.assertEqual(self.agent.call(self.rec, "/api/action", {"action": "stop"})[0], 428)
+        began = time.time()
+        status, body = self.agent.call(self.rec, "/api/action", {"action": "stop", "confirm": True})
+        self.assertEqual(status, 200, body)
+        self.assertLess(time.time() - began, 60)
+        lines = self.manager.get("win1").logs(200)
+        for _ in range(10):  # the tail reads the last lines a moment later
+            if any("saved on SIGINT" in l for l in lines):
+                break
+            time.sleep(.5)
+            lines = self.manager.get("win1").logs(200)
+        self.assertTrue(any("saved on SIGINT" in l for l in lines), lines)
+        self.assertFalse(any("was ended" in l for l in lines), lines)
+        self.assertEqual(self.status()["service"]["active"], "inactive")
+
+    def test_backup_retention(self):
+        backend = self.manager.ensure({**self.rec, "name": "win2"})[0]
+        world = winhost.instance_dir("win2") / "data" / "worlds_local" / "Midgard"
+        world.mkdir(parents=True)
+        (world / "_main.1.db2").write_bytes(b"x")
+        backend.cfg["backup_retain"] = 2
+        for i in range(4):
+            with mock.patch("vhdeploy.winhost.backend.datetime") as dt:
+                dt.now.return_value.strftime.return_value = f"2026010{i}-000000"
+                dt.now.return_value.isoformat.return_value = "x"
+                self.assertTrue(backend.backup()[0])
+        names = sorted(p.name for p in backend.backup_dir.glob("*.zip"))
+        self.assertEqual(names, ["Midgard-20260102-000000.zip", "Midgard-20260103-000000.zip"])
+        import zipfile
+        with zipfile.ZipFile(backend.backup_dir / names[-1]) as z:
+            self.assertEqual(z.namelist(), ["Midgard/_main.1.db2"])
 
 
 class FakeHetzner(BaseHTTPRequestHandler):
